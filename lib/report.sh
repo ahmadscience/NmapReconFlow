@@ -29,12 +29,114 @@ parse_vulns_from_file() {
     ' "$file" | sort -u
 }
 
+json_escape() {
+    local val="$1"
+    val="${val//\\/\\\\}"
+    val="${val//\"/\\\"}"
+    val="${val//\//\\/}"
+    val="${val//$'\n'/\\n}"
+    val="${val//$'\t'/\\t}"
+    val="${val//$'\r'/\\r}"
+    printf '%s' "$val"
+}
+
 yaml_escape() {
     local val="$1"
     val="${val//\\/\\\\}"
     val="${val//\"/\\\"}"
     val="${val//$'\n'/\\n}"
+    val="${val//$'\t'/\\t}"
+    val="${val//$'\r'/\\r}"
     printf '"%s"' "$val"
+}
+
+generate_json_report() {
+    local host="$1"
+    local scan_date="$2"
+    local duration="$3"
+    local json_file="summary.json"
+
+    # Use nameref arrays passed via global scope
+    local first=true
+    local comma=""
+
+    {
+        printf '{\n'
+        printf '  "target": "%s",\n' "$(json_escape "${host}")"
+        printf '  "hostname": "%s",\n' "$(json_escape "${urlIP:-${host}}")"
+        printf '  "os_detected": "%s",\n' "$(json_escape "${osType:-unknown}")"
+        printf '  "scan_date": "%s",\n' "$(json_escape "${scan_date}")"
+        printf '  "scan_duration_seconds": %d,\n' "${duration}"
+        printf '  "scan_type": "%s",\n' "$(json_escape "${TYPE}")"
+
+        # Ports array
+        printf '  "ports": [\n'
+        first=true
+        for line in "${all_port_lines[@]}"; do
+            IFS='|' read -r port proto state service ver source <<< "$line"
+            $first && first=false || printf ',\n'
+            printf '    {\n'
+            printf '      "port": %s,\n' "${port}"
+            printf '      "proto": "%s",\n' "$(json_escape "${proto}")"
+            printf '      "state": "%s",\n' "$(json_escape "${state}")"
+            printf '      "service": "%s",\n' "$(json_escape "${service}")"
+            printf '      "version": "%s",\n' "$(json_escape "${ver}")"
+            printf '      "discovered_in": "%s"\n' "$(json_escape "${source}")"
+            printf '    }'
+        done
+        printf '\n  ],\n'
+
+        # Vulnerabilities array
+        printf '  "vulnerabilities": [\n'
+        first=true
+        for v in "${vuln_lines[@]}"; do
+            IFS='|' read -r vid conf <<< "$v"
+            $first && first=false || printf ',\n'
+            printf '    {\n'
+            printf '      "id": "%s",\n' "$(json_escape "${vid}")"
+            printf '      "confidence": "%s"\n' "$(json_escape "${conf}")"
+            printf '    }'
+        done
+        printf '\n  ],\n'
+
+        # Recon tools array
+        printf '  "recon_tools": [\n'
+        first=true
+        for key in "${!RECON_TOOL_STATUS[@]}"; do
+            local tool_name="${key%%_*}"
+            local status="${RECON_TOOL_STATUS[$key]}"
+            local dur="${RECON_TOOL_DURATION[$key]:-0}"
+            $first && first=false || printf ',\n'
+            printf '    {\n'
+            printf '      "tool": "%s",\n' "$(json_escape "${tool_name}")"
+            printf '      "status": "%s",\n' "$(json_escape "${status}")"
+            printf '      "duration_seconds": %d\n' "${dur}"
+            printf '    }'
+        done
+        printf '\n  ],\n'
+
+        # Phases array
+        printf '  "phases": [\n'
+        first=true
+        for phase in "${SCAN_PHASES[@]}"; do
+            local pstatus="${PHASE_STATUS[$phase]:-pending}"
+            local pdur=0
+            if [ -n "${PHASE_START[$phase]:-}" ] && [ -n "${PHASE_END[$phase]:-}" ]; then
+                pdur=$((PHASE_END[$phase] - PHASE_START[$phase]))
+            fi
+            $first && first=false || printf ',\n'
+            printf '    {\n'
+            printf '      "name": "%s",\n' "$(json_escape "${phase}")"
+            printf '      "status": "%s",\n' "$(json_escape "${pstatus}")"
+            printf '      "duration_seconds": %d\n' "${pdur}"
+            printf '    }'
+        done
+        printf '\n  ]\n'
+
+        printf '}\n'
+    } > "${json_file}"
+
+    printf "\033[0;32mJSON report saved to: ${OUTPUTDIR}/${json_file}\033[0m\n"
 }
 
 generate_report() {
@@ -302,4 +404,8 @@ generate_report() {
     } > "${report_file}"
 
     printf "${GREEN}Report saved to: ${OUTPUTDIR}/${report_file}${NC}\n"
+
+    if [ "${REPORT_FORMAT}" = "json" ] || [ "${REPORT_FORMAT}" = "both" ]; then
+        generate_json_report "${host}" "${scan_date}" "${duration}"
+    fi
 }

@@ -41,6 +41,7 @@ run_with_timeout() {
         fi
     ) &
     local watchdog_pid=$!
+    CHILD_PIDS["$watchdog_pid"]=1
 
     wait "$child_pid" 2>/dev/null
     local exit_code=$?
@@ -48,6 +49,7 @@ run_with_timeout() {
     kill "$watchdog_pid" 2>/dev/null
     wait "$watchdog_pid" 2>/dev/null
 
+    unset CHILD_PIDS["$watchdog_pid"]
     unset CHILD_PIDS["$child_pid"]
 
     if [ $exit_code -eq 137 ] || [ $exit_code -eq 143 ]; then

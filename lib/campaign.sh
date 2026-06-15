@@ -23,6 +23,14 @@ run_single_target() {
     pingable=true
     RECON_TOOL_STATUS=()
     RECON_TOOL_DURATION=()
+    DNSSERVER=""
+    DNSSTRING=""
+    SCAN_PHASES=()
+    PHASE_STATUS=()
+    PHASE_START=()
+    PHASE_END=()
+    PHASE_NOTE=()
+    detect_dns_server
 
     main
 }
@@ -43,6 +51,10 @@ run_campaign() {
     while IFS= read -r line || [ -n "$line" ]; do
         line="$(echo "$line" | sed 's/#.*//' | awk '{$1=$1};1')"
         [ -z "$line" ] && continue
+        if ! validate_host_safe "$line"; then
+            log_warning "Skipping invalid target: ${line}"
+            continue
+        fi
         targets+=("$line")
     done < "$targets_file" || { log_error "Failed to read ${targets_file}"; exit 1; }
 

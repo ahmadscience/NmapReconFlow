@@ -53,6 +53,7 @@ end_phase() {
     else
         PHASE_STATUS["$phase"]="done"
     fi
+    save_phase_state "$phase" "${PHASE_STATUS[$phase]}"
     render_dashboard
 }
 
@@ -62,6 +63,25 @@ skip_phase() {
     PHASE_STATUS["$phase"]="skipped"
     PHASE_NOTE["$phase"]="$reason"
     render_dashboard
+}
+
+save_phase_state() {
+    local phase="$1"
+    local status="$2"
+    echo "${phase}=${status}" >> ".nmapReconFlow.state"
+}
+
+load_phase_state() {
+    declare -gA COMPLETED_PHASES=()
+    [ -f ".nmapReconFlow.state" ] || return 0
+    while IFS='=' read -r phase status; do
+        [ -n "$phase" ] && COMPLETED_PHASES["$phase"]="$status"
+    done < ".nmapReconFlow.state"
+}
+
+is_phase_completed() {
+    local phase="$1"
+    [ "${COMPLETED_PHASES[$phase]:-}" = "done" ]
 }
 
 format_duration() {
@@ -128,17 +148,22 @@ progressBar() {
 }
 
 nmapProgressBar() {
-    local nmap_cmd="$1"
+    local output_file="$1"
     local refreshRate="${2:-1}"
     local timeout_secs="${3:-${TIMEOUT_NMAP_PORT}}"
-    local outputFile
-    outputFile="$(echo "$nmap_cmd" | sed -e 's/.*-oN \(.*\).nmap.*/\1/').nmap"
+    shift 3
+    local outputFile="${output_file}"
     local tmpOutputFile="${outputFile}.tmp"
     local start_epoch nmap_rc=0 timed_out=false
     start_epoch="$(date +%s)"
 
+    if $DRY_RUN; then
+        printf "${YELLOW}[DRY-RUN] Would execute: %s${NC}\n" "$*" >&2
+        return 0
+    fi
+
     if [ ! -e "${outputFile}" ]; then
-        eval "${nmap_cmd} --stats-every ${refreshRate}s" >"${tmpOutputFile}" 2>&1 &
+        "$@" --stats-every "${refreshRate}s" >"${tmpOutputFile}" 2>&1 &
         local nmap_pid=$!
         CHILD_PIDS["$nmap_pid"]=1
     fi

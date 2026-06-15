@@ -89,12 +89,20 @@ reconRecommend() {
                 fi
 
                 if command -v ffuf >/dev/null 2>&1 && ! is_tool_skipped "ffuf"; then
-                    extensions="$(echo 'index' >./index && ffuf -s -w ./index:FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u "${urlType}${HOST}:${port}/FUZZ" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm -f ./index)"
+                    local tmpindex
+                    tmpindex="$(mktemp ./index.XXXXXX)"
+                    echo 'index' >"$tmpindex"
+                    extensions="$(ffuf -s -w "${tmpindex}":FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u "${urlType}${HOST}:${port}/FUZZ" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/,$//')"
+                    rm -f "$tmpindex"
                     local rate_flag=""
                     [ "${FFUF_RATE:-0}" -gt 0 ] 2>/dev/null && rate_flag="-rate ${FFUF_RATE}"
                     echo "ffuf -ic -w \"${dirb_wordlist}\" -e '${extensions}' ${rate_flag} -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"recon/ffuf_${HOST}_${port}.txt\""
                 elif command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
-                    extensions="$(echo 'index' >./index && gobuster dir -w ./index -t ${GOBUSTER_THREADS} -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm -f ./index)"
+                    local tmpindex
+                    tmpindex="$(mktemp ./index.XXXXXX)"
+                    echo 'index' >"$tmpindex"
+                    extensions="$(gobuster dir -w "${tmpindex}" -t ${GOBUSTER_THREADS} -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/,$//')"
+                    rm -f "$tmpindex"
                     echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"recon/gobuster_${HOST}_${port}.txt\""
                 fi
                 echo
@@ -111,13 +119,15 @@ reconRecommend() {
                     local port
                     port="$(sed -n 'H;x;s/\/.*'"${cms_line}"'.*//p' "nmap/Script_${HOST}.nmap")"
 
-                    if ! case "${cms}" in Joomla|WordPress|Drupal) false;; esac then
-                        printf "${NC}\n"
-                        printf "${YELLOW}CMS Recon:\n"
-                        printf "${NC}\n"
-                    fi
-                    case "${cms}" in
-                        Joomla!)
+                    case "${cms_line}" in
+                        Joomla*|WordPress|Drupal)
+                            printf "${NC}\n"
+                            printf "${YELLOW}CMS Recon:\n"
+                            printf "${NC}\n"
+                            ;;
+                    esac
+                    case "${cms_line}" in
+                        Joomla*)
                             ! is_tool_skipped "joomscan" && echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\""
                             ;;
                         WordPress)
@@ -134,6 +144,33 @@ reconRecommend() {
                 done
             fi
         fi
+    fi
+
+    # Non-standard web port detection
+    if [ -n "${EXTRA_WEB_PORTS}" ]; then
+        local IFS=','
+        local extra_port
+        for extra_port in ${EXTRA_WEB_PORTS}; do
+            if echo "${file}" | grep -q "^${extra_port}/tcp" && \
+               ! echo "${file}" | grep -i -q "^${extra_port}/tcp.*http"; then
+                local urlType="http://"
+                case "${extra_port}" in
+                    *443*) urlType="https://" ;;
+                esac
+                printf "${NC}\n"
+                printf "${YELLOW}Detected non-standard web port ${extra_port}:\n"
+                printf "${NC}\n"
+                if command -v nikto >/dev/null 2>&1 && ! is_tool_skipped "nikto"; then
+                    echo "nikto -host \"${urlType}${HOST}:${extra_port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"recon/nikto_${HOST}_${extra_port}.txt\""
+                fi
+                if command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
+                    local dirb_wordlist
+                    dirb_wordlist="$(find_wordlist "${WORDLIST_DIRB}")" || dirb_wordlist="/usr/share/wordlists/dirb/common.txt"
+                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -eku \"${urlType}${HOST}:${extra_port}\" -o \"recon/gobuster_${HOST}_${extra_port}.txt\""
+                fi
+                echo
+            fi
+        done
     fi
 
     # SNMP recon
@@ -300,6 +337,11 @@ runRecon() {
             printf "${NC}\n"
             printf "${YELLOW}Starting ${currentScan} scan\n"
             printf "${NC}\n"
+
+            if $DRY_RUN; then
+                printf "${YELLOW}[DRY-RUN] Would execute: %s${NC}\n" "${line}" >&2
+                continue
+            fi
 
             local tool_start
             tool_start="$(date +%s)"

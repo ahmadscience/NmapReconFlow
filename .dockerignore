@@ -1,0 +1,8 @@
+.git
+nmapAutomator.sh
+*.md
+!README.md
+.dockerignore
+Dockerfile
+install.sh
+.gitignore

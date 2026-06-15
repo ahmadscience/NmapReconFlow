@@ -99,12 +99,16 @@ set_defaults() {
     : "${PREFER_FFUF:=true}"
     : "${SKIP_RECON_TOOLS:=}"
 
+    : "${EXTRA_WEB_PORTS:=8080,8443,3000,9090,8000,8888,4443,8008}"
+
     : "${GOBUSTER_THREADS:=30}"
     : "${FFUF_RATE:=0}"
     : "${WPSCAN_THROTTLE:=0}"
 
     : "${GENERATE_REPORT:=true}"
     : "${REPORT_MAX_TOOL_OUTPUT:=200}"
+    : "${REPORT_FORMAT:=markdown}"
+    : "${DRY_RUN:=false}"
 }
 
 load_config() {
@@ -127,10 +131,30 @@ load_config() {
             printf "${RED:-}Warning: Config file contains invalid lines. Skipping.${NC:-}\n" >&2
             return 1
         fi
+        if grep -qE '\$\(|`' "$config_file" 2>/dev/null; then
+            printf "${RED:-}Warning: Config file contains command substitutions. Skipping.${NC:-}\n" >&2
+            return 1
+        fi
         # shellcheck disable=SC1090
         source "$config_file"
         printf "${GREEN:-}Loaded config: ${config_file}${NC:-}\n"
     fi
+}
+
+resolve_hostname() {
+    local hostname="$1"
+    local dns_server="${2:-}"
+    local result=""
+
+    if command -v host >/dev/null 2>&1; then
+        result="$(host -4 -W 1 "${hostname}" ${dns_server} 2>/dev/null | grep "${hostname}" | head -n 1 | awk '{print $NF}')"
+    elif command -v dig >/dev/null 2>&1; then
+        result="$(dig +short -4 "${hostname}" ${dns_server:+@${dns_server}} 2>/dev/null | head -n 1)"
+    elif command -v getent >/dev/null 2>&1; then
+        result="$(getent ahostsv4 "${hostname}" 2>/dev/null | head -n 1 | awk '{print $1}')"
+    fi
+
+    [ -n "${result}" ] && printf '%s' "${result}"
 }
 
 detect_nmap_binary() {
