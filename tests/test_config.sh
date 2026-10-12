@@ -55,3 +55,34 @@ DRY_RUN=true
 assert_exit 0 send_notification "dry-run message"
 DRY_RUN=false
 NOTIFY_WEBHOOK=""
+
+# --- set_defaults: scan profile + per-port defaults ---
+assert_eq "normal" "$SCAN_PROFILE" "set_defaults: SCAN_PROFILE defaults to normal"
+assert_eq "false" "$RECON_PER_PORT_DIRS" "set_defaults: RECON_PER_PORT_DIRS defaults to false"
+
+# --- apply_scan_profile: tuning knobs per profile ---
+# Run in subshells (unset knobs first) so the parent shell's config is untouched.
+_profile_knobs() {
+    (
+        unset NMAP_TIMING NMAP_MAX_RATE NMAP_MAX_RETRIES NMAP_MAX_SCAN_DELAY
+        SCAN_PROFILE="$1"
+        apply_scan_profile 2>/dev/null
+        printf '%s:%s:%s:%s' "${NMAP_TIMING}" "${NMAP_MAX_RATE}" "${NMAP_MAX_RETRIES}" "${NMAP_MAX_SCAN_DELAY}"
+    )
+}
+assert_eq "2:100:2:200"  "$(_profile_knobs stealth)"    "apply_scan_profile: stealth tuning"
+assert_eq "4:500:1:20"   "$(_profile_knobs normal)"     "apply_scan_profile: normal tuning"
+assert_eq "5:5000:1:5"   "$(_profile_knobs aggressive)" "apply_scan_profile: aggressive tuning"
+
+# --- apply_scan_profile: explicit knob overrides the profile ---
+assert_eq "7:100:2:200" "$(
+    unset NMAP_MAX_RATE NMAP_MAX_RETRIES NMAP_MAX_SCAN_DELAY
+    NMAP_TIMING=7 SCAN_PROFILE=stealth
+    apply_scan_profile 2>/dev/null
+    printf '%s:%s:%s:%s' "${NMAP_TIMING}" "${NMAP_MAX_RATE}" "${NMAP_MAX_RETRIES}" "${NMAP_MAX_SCAN_DELAY}"
+)" "apply_scan_profile: explicit NMAP_TIMING wins over profile"
+
+# --- apply_scan_profile: name normalization ---
+_profile_name() { ( SCAN_PROFILE="$1"; apply_scan_profile 2>/dev/null; printf '%s' "${SCAN_PROFILE}" ); }
+assert_eq "normal"  "$(_profile_name bogus)"   "apply_scan_profile: unknown profile falls back to normal"
+assert_eq "stealth" "$(_profile_name stealth)" "apply_scan_profile: keeps valid profile name"

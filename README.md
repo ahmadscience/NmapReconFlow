@@ -26,6 +26,8 @@ NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
 - **HTML report** — `--html` renders `summary.html` from the nmap XML (via `xsltproc`).
 - **Notifications** — set `NOTIFY_WEBHOOK` to ping Slack/Discord/a generic webhook when a scan or campaign finishes.
 - **Opt-in brute force** — `--brute` auto-runs hydra against ssh/ftp/rdp (off by default; lockout risk).
+- **Scan profiles** — `--profile stealth|normal|aggressive` presets nmap timing, rate, retries, and scan-delay in one flag.
+- **Per-port output dirs** — `--per-port-dirs` groups recon output under `recon/<port>/` (AutoRecon-style) instead of a flat folder.
 - **Docker & installer** — `Dockerfile` (Kali + tools) and `install.sh`.
 
 ## Features
@@ -137,6 +139,8 @@ Optional:
   --dry-run                 Show what would run without executing
   --html                    Also generate summary.html from nmap XML
   --brute                   Auto-run hydra against ssh/ftp/rdp (lockout risk!)
+  --profile <NAME>          Timing profile: stealth, normal, aggressive (default: normal)
+  --per-port-dirs           Group recon output under recon/<port>/ (AutoRecon-style)
   -v, --version             Print version
 ```
 
@@ -159,7 +163,23 @@ as a campaign, and IPv6 addresses (scanned with `nmap -6`).
 
 # Custom config and output dir
 ./nmapReconFlow.sh -H 10.10.10.10 -t All -a -c custom.conf -o results/
+
+# Quiet/slow scan with per-port recon folders
+./nmapReconFlow.sh -H 10.10.10.10 -t All -a --profile stealth --per-port-dirs
+
+# Fast and loud (labs/CTFs)
+./nmapReconFlow.sh -H 10.10.10.10 -t Full -a --profile aggressive
 ```
+
+### Scan Profiles
+`--profile` sets nmap timing knobs in one flag. Any explicit `NMAP_*` value in
+your config overrides the profile.
+
+| Profile | Timing | Max rate | Retries | Max scan-delay |
+|---------|:------:|:--------:|:-------:|:--------------:|
+| stealth | `-T2` | 100/s | 2 | 200 |
+| normal (default) | `-T4` | 500/s | 1 | 20 |
+| aggressive | `-T5` | 5000/s | 1 | 5 |
 
 ### Legacy Compatibility
 The old `nmapAutomator.sh` flags still work. `Quick` maps to `Port`, `Basic` maps to `Script`.
@@ -182,6 +202,10 @@ target_ip/
     searchsploit_target.txt
     _manual_commands.txt        # Intrusive follow-ups to run by hand
     ...
+    # With --per-port-dirs, port-specific output is grouped instead:
+    #   recon/80/nikto_target.txt
+    #   recon/80/ffuf_target.txt
+    #   recon/443/sslscan_target.txt
   summary.md                    # Human + AI readable report
   summary.json                  # Machine-readable (when --format json/both)
   nmapReconFlow_target_All.txt  # Full console output

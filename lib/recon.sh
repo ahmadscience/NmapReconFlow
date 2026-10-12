@@ -13,6 +13,23 @@ is_tool_skipped() {
     return 1
 }
 
+# Build a recon output file path for a tool/host(/port). With
+# RECON_PER_PORT_DIRS=true and a port given, groups output under recon/<port>/
+# (AutoRecon-style) and creates that directory as a side effect so the emitted
+# command can write to it. Otherwise uses the flat legacy layout. Host-level
+# tools (no port) always stay in recon/ root.
+recon_outfile() {
+    local tool="$1" host="$2" port="${3:-}"
+    if [ "${RECON_PER_PORT_DIRS}" = "true" ] && [ -n "${port}" ]; then
+        mkdir -p "recon/${port}" 2>/dev/null
+        printf 'recon/%s/%s_%s.txt' "${port}" "${tool}" "${host}"
+    elif [ -n "${port}" ]; then
+        printf 'recon/%s_%s_%s.txt' "${tool}" "${host}" "${port}"
+    else
+        printf 'recon/%s_%s.txt' "${tool}" "${host}"
+    fi
+}
+
 reconRecommend() {
     printf "${GREEN}---------------------Recon Recommendations---------------------\n"
     printf "${NC}\n"
@@ -76,15 +93,15 @@ reconRecommend() {
                 if echo "${line}" | grep -q ssl/http; then
                     urlType='https://'
                     if ! is_tool_skipped "sslscan"; then
-                        echo "sslscan \"${HOST}\" | tee \"recon/sslscan_${HOST}_${port}.txt\""
+                        echo "sslscan \"${HOST}\" | tee \"$(recon_outfile sslscan "${HOST}" "${port}")\""
                     fi
                     if ! is_tool_skipped "nikto"; then
-                        echo "nikto -host \"${urlType}${HOST}:${port}\" -ssl -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"recon/nikto_${HOST}_${port}.txt\""
+                        echo "nikto -host \"${urlType}${HOST}:${port}\" -ssl -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"$(recon_outfile nikto "${HOST}" "${port}")\""
                     fi
                 else
                     urlType='http://'
                     if ! is_tool_skipped "nikto"; then
-                        echo "nikto -host \"${urlType}${HOST}:${port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"recon/nikto_${HOST}_${port}.txt\""
+                        echo "nikto -host \"${urlType}${HOST}:${port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"$(recon_outfile nikto "${HOST}" "${port}")\""
                     fi
                 fi
 
@@ -96,14 +113,14 @@ reconRecommend() {
                     rm -f "$tmpindex"
                     local rate_flag=""
                     [ "${FFUF_RATE:-0}" -gt 0 ] 2>/dev/null && rate_flag="-rate ${FFUF_RATE}"
-                    echo "ffuf -ic -w \"${dirb_wordlist}\" -e '${extensions}' ${rate_flag} -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"recon/ffuf_${HOST}_${port}.txt\""
+                    echo "ffuf -ic -w \"${dirb_wordlist}\" -e '${extensions}' ${rate_flag} -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"$(recon_outfile ffuf "${HOST}" "${port}")\""
                 elif command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
                     local tmpindex
                     tmpindex="$(mktemp ./index.XXXXXX)"
                     echo 'index' >"$tmpindex"
                     extensions="$(gobuster dir -w "${tmpindex}" -t ${GOBUSTER_THREADS} -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/,$//')"
                     rm -f "$tmpindex"
-                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"recon/gobuster_${HOST}_${port}.txt\""
+                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"$(recon_outfile gobuster "${HOST}" "${port}")\""
                 fi
                 echo
             fi
@@ -128,17 +145,17 @@ reconRecommend() {
                     esac
                     case "${cms_line}" in
                         Joomla*)
-                            ! is_tool_skipped "joomscan" && echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\""
+                            ! is_tool_skipped "joomscan" && echo "joomscan --url \"${HOST}:${port}\" | tee \"$(recon_outfile joomscan "${HOST}" "${port}")\""
                             ;;
                         WordPress)
                             if ! is_tool_skipped "wpscan"; then
                                 local throttle_flag=""
                                 [ "${WPSCAN_THROTTLE:-0}" -gt 0 ] 2>/dev/null && throttle_flag="--throttle ${WPSCAN_THROTTLE}"
-                                echo "wpscan --url \"${HOST}:${port}\" --enumerate p ${throttle_flag} | tee \"recon/wpscan_${HOST}_${port}.txt\""
+                                echo "wpscan --url \"${HOST}:${port}\" --enumerate p ${throttle_flag} | tee \"$(recon_outfile wpscan "${HOST}" "${port}")\""
                             fi
                             ;;
                         Drupal)
-                            ! is_tool_skipped "droopescan" && echo "droopescan scan drupal -u \"${HOST}:${port}\" | tee \"recon/droopescan_${HOST}_${port}.txt\""
+                            ! is_tool_skipped "droopescan" && echo "droopescan scan drupal -u \"${HOST}:${port}\" | tee \"$(recon_outfile droopescan "${HOST}" "${port}")\""
                             ;;
                     esac
                 done
@@ -161,12 +178,12 @@ reconRecommend() {
                 printf "${YELLOW}Detected non-standard web port ${extra_port}:\n"
                 printf "${NC}\n"
                 if command -v nikto >/dev/null 2>&1 && ! is_tool_skipped "nikto"; then
-                    echo "nikto -host \"${urlType}${HOST}:${extra_port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"recon/nikto_${HOST}_${extra_port}.txt\""
+                    echo "nikto -host \"${urlType}${HOST}:${extra_port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"$(recon_outfile nikto "${HOST}" "${extra_port}")\""
                 fi
                 if command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
                     local dirb_wordlist
                     dirb_wordlist="$(find_wordlist "${WORDLIST_DIRB}")" || dirb_wordlist="/usr/share/wordlists/dirb/common.txt"
-                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -eku \"${urlType}${HOST}:${extra_port}\" -o \"recon/gobuster_${HOST}_${extra_port}.txt\""
+                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -eku \"${urlType}${HOST}:${extra_port}\" -o \"$(recon_outfile gobuster "${HOST}" "${extra_port}")\""
                 fi
                 echo
             fi
@@ -402,6 +419,10 @@ runRecon() {
             printf "${NC}\n"
             printf "${YELLOW}Starting ${currentScan} scan\n"
             printf "${NC}\n"
+
+            # Ensure any per-port subdirectory exists before the command runs
+            # (strip a trailing quote the recon/ field split may carry).
+            mkdir -p "$(dirname "recon/${fileName%\"}")" 2>/dev/null
 
             if $DRY_RUN; then
                 printf "${YELLOW}[DRY-RUN] Would execute: %s${NC}\n" "${line}" >&2
