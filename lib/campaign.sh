@@ -147,6 +147,8 @@ run_campaign() {
     printf "\n${GREEN}${BOLD}=== Campaign Complete ===${NC}\n"
     printf "${YELLOW}Results in: ${campaign_dir}/${NC}\n"
     printf "${YELLOW}Summary: ${campaign_dir}/campaign_summary.md${NC}\n"
+
+    send_notification "NmapReconFlow campaign complete: ${total} target(s), type ${TYPE}. Results in ${campaign_dir}/"
 }
 
 _campaign_generate_summary() {

@@ -23,6 +23,9 @@ NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
 - **searchsploit** — offline Exploit-DB lookup against the scan's XML.
 - **Manual-commands file** — intrusive follow-ups (brute force, spraying) are written to `recon/_manual_commands.txt` instead of auto-running.
 - **Dry-run & resume** — `--dry-run` previews commands; `--resume` skips already-completed phases.
+- **HTML report** — `--html` renders `summary.html` from the nmap XML (via `xsltproc`).
+- **Notifications** — set `NOTIFY_WEBHOOK` to ping Slack/Discord/a generic webhook when a scan or campaign finishes.
+- **Opt-in brute force** — `--brute` auto-runs hydra against ssh/ftp/rdp (off by default; lockout risk).
 - **Docker & installer** — `Dockerfile` (Kali + tools) and `install.sh`.
 
 ## Features
@@ -132,6 +135,8 @@ Optional:
   --no-report               Skip summary.md generation
   --format <FORMAT>         Report format: markdown, json, or both
   --dry-run                 Show what would run without executing
+  --html                    Also generate summary.html from nmap XML
+  --brute                   Auto-run hydra against ssh/ftp/rdp (lockout risk!)
   -v, --version             Print version
 ```
 

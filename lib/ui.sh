@@ -223,3 +223,33 @@ log_error() {
 log_info() {
     printf "${GREEN}[INFO] $1${NC}\n" >&2
 }
+
+# Send a completion notification to NOTIFY_WEBHOOK, if configured.
+# Supports Slack/Discord incoming webhooks and a generic {"text": ...} JSON.
+send_notification() {
+    local message="$1"
+    [ -z "${NOTIFY_WEBHOOK:-}" ] && return 0
+    command -v curl >/dev/null 2>&1 || { log_warning "NOTIFY_WEBHOOK set but curl not found"; return 0; }
+
+    if ${DRY_RUN:-false}; then
+        printf "${YELLOW}[DRY-RUN] Would notify: %s${NC}\n" "${message}" >&2
+        return 0
+    fi
+
+    # JSON-escape the message (backslash, double-quote, newline).
+    local esc="${message//\\/\\\\}"
+    esc="${esc//\"/\\\"}"
+    esc="${esc//$'\n'/\\n}"
+
+    local payload
+    case "${NOTIFY_STYLE:-slack}" in
+        discord) payload="{\"content\": \"${esc}\"}" ;;
+        slack)   payload="{\"text\": \"${esc}\"}" ;;
+        *)       payload="{\"text\": \"${esc}\"}" ;;
+    esac
+
+    curl -s -m 15 -X POST -H 'Content-Type: application/json' \
+        -d "${payload}" "${NOTIFY_WEBHOOK}" >/dev/null 2>&1 \
+        && log_info "Notification sent" \
+        || log_warning "Failed to send notification"
+}
