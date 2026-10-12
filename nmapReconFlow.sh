@@ -51,6 +51,8 @@ usage() {
     printf "${YELLOW}  --no-report                ${NC}Skip summary.md generation\n"
     printf "${YELLOW}  --format ${NC}<FORMAT>          ${YELLOW}Report format: markdown, json, or both (default: markdown)\n"
     printf "${YELLOW}  --dry-run                  ${NC}Show what would be executed without running scans\n"
+    printf "${YELLOW}  --html                     ${NC}Also generate summary.html from nmap XML (needs xsltproc)\n"
+    printf "${YELLOW}  --brute                    ${NC}Auto-run hydra against ssh/ftp/rdp (lockout risk!)\n"
     printf "${YELLOW}  -v, --version              ${NC}Print version\n"
     printf "${YELLOW}  -h, --help                 ${NC}Show this help\n"
     printf "${YELLOW}\nScan Types:\n"
@@ -98,6 +100,10 @@ while [ $# -gt 0 ]; do
             DRY_RUN=true; shift ;;
         --resume)
             RESUME_SCAN=true; shift ;;
+        --html)
+            REPORT_HTML=true; shift ;;
+        --brute)
+            RUN_BRUTE=true; shift ;;
         -v|--version)
             echo "NmapReconFlow v${NMAPRF_VERSION}"; exit 0 ;;
         -h|--help)
@@ -352,6 +358,8 @@ if is_valid_scan_type "${TYPE}"; then
     }
 
     main | tee "nmapReconFlow_${HOST}_${TYPE}.txt"
+
+    send_notification "NmapReconFlow: ${TYPE} scan of ${HOST} complete. Results in ${OUTPUTDIR}/"
 else
     printf "${RED}\nInvalid Type!\n${NC}"
     usage

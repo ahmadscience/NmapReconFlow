@@ -66,3 +66,17 @@
 # NMAP_XML=true                  # Also write nmap XML (-oX) alongside -oN;
 #                                #   enables searchsploit --nmap and HTML reports
 # ENABLE_SEARCHSPLOIT=true       # Suggest searchsploit lookups against nmap XML
+# REPORT_HTML=false              # Also render summary.html from nmap XML (needs xsltproc)
+
+# ============================================================
+# Notifications (completion webhook)
+# ============================================================
+# NOTIFY_WEBHOOK=                # Slack/Discord/generic webhook URL (empty = off)
+# NOTIFY_STYLE=slack             # slack|discord|generic payload format
+
+# ============================================================
+# Brute Force (intrusive - off by default, lockout risk)
+# ============================================================
+# RUN_BRUTE=false                # Auto-run hydra against ssh/ftp/rdp
+# BRUTE_USERLIST=metasploit/unix_users.txt   # Resolved via find_wordlist
+# BRUTE_PASSLIST=rockyou.txt                 # Resolved via find_wordlist

@@ -119,6 +119,21 @@ set_defaults() {
 
     # Suggest searchsploit lookups on detected service versions
     : "${ENABLE_SEARCHSPLOIT:=true}"
+
+    # HTML report generated from the nmap XML (requires NMAP_XML + xsltproc)
+    : "${REPORT_HTML:=false}"
+
+    # Completion notification webhook (Slack/Discord/generic). Empty = disabled.
+    : "${NOTIFY_WEBHOOK:=}"
+    # Webhook payload style: slack|discord|generic (JSON {"text": ...})
+    : "${NOTIFY_STYLE:=slack}"
+
+    # Actually run intrusive brute-force/spray commands instead of only
+    # writing them to recon/_manual_commands.txt. Off by default (lockout risk).
+    : "${RUN_BRUTE:=false}"
+    # Wordlists used when RUN_BRUTE=true (resolved via find_wordlist).
+    : "${BRUTE_USERLIST:=metasploit/unix_users.txt}"
+    : "${BRUTE_PASSLIST:=rockyou.txt}"
 }
 
 # Build the nmap output flags for a given basename (without extension).

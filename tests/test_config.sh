@@ -38,3 +38,20 @@ assert_eq "markdown" "$REPORT_FORMAT" "set_defaults: REPORT_FORMAT defaults to m
 
 # --- set_defaults: DRY_RUN ---
 assert_eq "false" "$DRY_RUN" "set_defaults: DRY_RUN defaults to false"
+
+# --- set_defaults: new feature toggles ---
+assert_eq "false" "$REPORT_HTML" "set_defaults: REPORT_HTML defaults to false"
+assert_eq "false" "$RUN_BRUTE" "set_defaults: RUN_BRUTE defaults to false"
+assert_eq "slack" "$NOTIFY_STYLE" "set_defaults: NOTIFY_STYLE defaults to slack"
+assert_eq "" "$NOTIFY_WEBHOOK" "set_defaults: NOTIFY_WEBHOOK empty by default"
+
+# --- send_notification: no-op when webhook unset ---
+NOTIFY_WEBHOOK=""
+assert_exit 0 send_notification "test message"
+
+# --- send_notification: dry-run does not call curl ---
+NOTIFY_WEBHOOK="https://example.invalid/hook"
+DRY_RUN=true
+assert_exit 0 send_notification "dry-run message"
+DRY_RUN=false
+NOTIFY_WEBHOOK=""

@@ -255,10 +255,32 @@ reconRecommend() {
 }
 
 # Record intrusive, human-in-the-loop commands to recon/_manual_commands.txt.
+# When RUN_BRUTE=true, emit runnable hydra commands for credential services
+# (ssh/ftp/rdp) to stdout so runRecon executes them with real wordlists.
 suggest_manual_followups() {
     local file="$1"
     local manual="recon/_manual_commands.txt"
     mkdir -p recon/ 2>/dev/null
+
+    if [ "${RUN_BRUTE}" = "true" ] && command -v hydra >/dev/null 2>&1; then
+        local ulist plist
+        ulist="$(find_wordlist "${BRUTE_USERLIST}")" || ulist=""
+        plist="$(find_wordlist "${BRUTE_PASSLIST}")" || plist=""
+        if [ -n "${ulist}" ] && [ -n "${plist}" ]; then
+            printf "${RED}RUN_BRUTE enabled: auto-running hydra against credential services (lockout risk!)${NC}\n" >&2
+            local svc
+            for svc in ssh ftp rdp; do
+                case "${svc}" in
+                    ssh) echo "${file}" | grep -q "22/tcp"  || continue ;;
+                    ftp) echo "${file}" | grep -q "21/tcp"  || continue ;;
+                    rdp) echo "${file}" | grep -q "3389/tcp" || continue ;;
+                esac
+                echo "hydra -L \"${ulist}\" -P \"${plist}\" -f -t 4 ${svc}://${HOST} | tee \"recon/hydra_${svc}_${HOST}.txt\""
+            done
+        else
+            log_warning "RUN_BRUTE=true but brute wordlists not found; writing manual commands instead"
+        fi
+    fi
 
     local -a lines=()
     echo "${file}" | grep -q "22/tcp"  && lines+=("# SSH brute force (set USER/PASS lists):" "hydra -L users.txt -P passwords.txt ssh://${HOST}")

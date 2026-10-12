@@ -408,4 +408,45 @@ generate_report() {
     if [ "${REPORT_FORMAT}" = "json" ] || [ "${REPORT_FORMAT}" = "both" ]; then
         generate_json_report "${host}" "${scan_date}" "${duration}"
     fi
+
+    if [ "${REPORT_HTML}" = "true" ]; then
+        generate_html_report "${host}"
+    fi
+}
+
+# Render an HTML report from nmap XML via xsltproc (nmap ships the stylesheet).
+# Merges all per-scan XML files for the host into one page.
+generate_html_report() {
+    local host="$1"
+    local html_file="summary.html"
+
+    if ! command -v xsltproc >/dev/null 2>&1; then
+        log_warning "REPORT_HTML=true but xsltproc not found; skipping HTML report"
+        return 0
+    fi
+
+    local -a xmls=()
+    local f
+    for f in nmap/*_"${host}".xml; do
+        [ -f "$f" ] && xmls+=("$f")
+    done
+    if [ ${#xmls[@]} -eq 0 ]; then
+        log_warning "No nmap XML files found (set NMAP_XML=true); skipping HTML report"
+        return 0
+    fi
+
+    # Prefer the richest scan XML for the single-file stylesheet render.
+    local primary="${xmls[0]}"
+    for f in "${xmls[@]}"; do
+        case "$f" in
+            nmap/Full_Extra_*) primary="$f" ;;
+            nmap/Script_*) [ "${primary##*/}" != Full_Extra_* ] && primary="$f" ;;
+        esac
+    done
+
+    if xsltproc "$primary" -o "$html_file" 2>/dev/null; then
+        printf "${GREEN}HTML report saved to: ${OUTPUTDIR}/${html_file}${NC}\n"
+    else
+        log_warning "xsltproc failed to render HTML report"
+    fi
 }
