@@ -53,6 +53,8 @@ usage() {
     printf "${YELLOW}  --dry-run                  ${NC}Show what would be executed without running scans\n"
     printf "${YELLOW}  --html                     ${NC}Also generate summary.html from nmap XML (needs xsltproc)\n"
     printf "${YELLOW}  --brute                    ${NC}Auto-run hydra against ssh/ftp/rdp (lockout risk!)\n"
+    printf "${YELLOW}  --profile ${NC}<NAME>           ${YELLOW}Timing profile: stealth, normal, aggressive (default: normal)\n"
+    printf "${YELLOW}  --per-port-dirs            ${NC}Group recon output under recon/<port>/ (AutoRecon-style)\n"
     printf "${YELLOW}  -v, --version              ${NC}Print version\n"
     printf "${YELLOW}  -h, --help                 ${NC}Show this help\n"
     printf "${YELLOW}\nScan Types:\n"
@@ -104,6 +106,10 @@ while [ $# -gt 0 ]; do
             REPORT_HTML=true; shift ;;
         --brute)
             RUN_BRUTE=true; shift ;;
+        --profile)
+            SCAN_PROFILE="$2"; shift; shift ;;
+        --per-port-dirs)
+            RECON_PER_PORT_DIRS=true; shift ;;
         -v|--version)
             echo "NmapReconFlow v${NMAPRF_VERSION}"; exit 0 ;;
         -h|--help)

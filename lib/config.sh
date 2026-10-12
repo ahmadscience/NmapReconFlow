@@ -92,6 +92,10 @@ set_defaults() {
     : "${AUTOPILOT:=false}"
     : "${CAMPAIGN_PARALLEL:=1}"
 
+    # Scan timing profile: stealth|normal|aggressive. Tunes the nmap knobs
+    # below (timing, rate, retries, scan-delay). See apply_scan_profile().
+    : "${SCAN_PROFILE:=normal}"
+
     : "${WORDLIST_BASE_DIR:=}"
     : "${WORDLIST_DIRB:=dirb/common.txt}"
     : "${WORDLIST_USERS:=metasploit/unix_users.txt}"
@@ -120,6 +124,10 @@ set_defaults() {
     # Suggest searchsploit lookups on detected service versions
     : "${ENABLE_SEARCHSPLOIT:=true}"
 
+    # Group per-port recon output under recon/<port>/ (AutoRecon-style) instead
+    # of the flat recon/<tool>_<host>_<port>.txt layout. Off = backward compat.
+    : "${RECON_PER_PORT_DIRS:=false}"
+
     # HTML report generated from the nmap XML (requires NMAP_XML + xsltproc)
     : "${REPORT_HTML:=false}"
 
@@ -147,6 +155,47 @@ nmap_output_flags() {
     fi
 }
 
+# Apply the SCAN_PROFILE preset to the nmap tuning knobs. Uses := so an
+# explicit config/CLI/env value always wins over the profile; the profile
+# only fills knobs the user has not set. Unknown names fall back to normal.
+# Called from load_config BEFORE set_defaults so profile values take effect
+# before the built-in defaults would otherwise fill them.
+apply_scan_profile() {
+    local profile="${SCAN_PROFILE:-normal}"
+    case "${profile}" in
+        stealth|normal|aggressive) ;;
+        *)
+            printf "${YELLOW:-}Unknown scan profile '%s'; falling back to 'normal'.${NC:-}\n" "${profile}" >&2
+            profile="normal"
+            ;;
+    esac
+    SCAN_PROFILE="${profile}"
+
+    case "${profile}" in
+        stealth)
+            # Slow and quiet: minimise footprint and lockout/IDS risk.
+            : "${NMAP_TIMING:=2}"
+            : "${NMAP_MAX_RATE:=100}"
+            : "${NMAP_MAX_RETRIES:=2}"
+            : "${NMAP_MAX_SCAN_DELAY:=200}"
+            ;;
+        aggressive)
+            # Fast and loud: for labs/CTFs where speed beats stealth.
+            : "${NMAP_TIMING:=5}"
+            : "${NMAP_MAX_RATE:=5000}"
+            : "${NMAP_MAX_RETRIES:=1}"
+            : "${NMAP_MAX_SCAN_DELAY:=5}"
+            ;;
+        normal)
+            # Balanced defaults (same as the built-in defaults).
+            : "${NMAP_TIMING:=4}"
+            : "${NMAP_MAX_RATE:=500}"
+            : "${NMAP_MAX_RETRIES:=1}"
+            : "${NMAP_MAX_SCAN_DELAY:=20}"
+            ;;
+    esac
+}
+
 load_config() {
     local config_file=""
 
@@ -160,21 +209,24 @@ load_config() {
         config_file="${HOME}/.nmapReconFlow.conf"
     fi
 
-    set_defaults
-
+    # Source the config file first (if any) so SCAN_PROFILE and any explicit
+    # tuning overrides are known, then let the profile fill unset knobs, then
+    # fill everything still unset with built-in defaults. An invalid config is
+    # skipped but defaults are still applied.
     if [ -n "$config_file" ]; then
         if grep -qvE '^([[:space:]]*#|[[:space:]]*$|[A-Z_][A-Z_0-9]*=)' "$config_file" 2>/dev/null; then
             printf "${RED:-}Warning: Config file contains invalid lines. Skipping.${NC:-}\n" >&2
-            return 1
-        fi
-        if grep -qE '\$\(|`' "$config_file" 2>/dev/null; then
+        elif grep -qE '\$\(|`' "$config_file" 2>/dev/null; then
             printf "${RED:-}Warning: Config file contains command substitutions. Skipping.${NC:-}\n" >&2
-            return 1
+        else
+            # shellcheck disable=SC1090
+            source "$config_file"
+            printf "${GREEN:-}Loaded config: ${config_file}${NC:-}\n"
         fi
-        # shellcheck disable=SC1090
-        source "$config_file"
-        printf "${GREEN:-}Loaded config: ${config_file}${NC:-}\n"
     fi
+
+    apply_scan_profile
+    set_defaults
 }
 
 resolve_hostname() {

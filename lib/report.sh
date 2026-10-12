@@ -68,6 +68,7 @@ generate_json_report() {
         printf '  "scan_date": "%s",\n' "$(json_escape "${scan_date}")"
         printf '  "scan_duration_seconds": %d,\n' "${duration}"
         printf '  "scan_type": "%s",\n' "$(json_escape "${TYPE}")"
+        printf '  "scan_profile": "%s",\n' "$(json_escape "${SCAN_PROFILE:-normal}")"
 
         # Ports array
         printf '  "ports": [\n'
@@ -253,6 +254,7 @@ generate_report() {
         echo "scan_date: \"${scan_date}\""
         echo "scan_duration_seconds: ${duration}"
         echo "scan_type: $(yaml_escape "${TYPE}")"
+        echo "scan_profile: $(yaml_escape "${SCAN_PROFILE:-normal}")"
         echo "ports:"
         for line in "${all_port_lines[@]}"; do
             IFS='|' read -r port proto state service ver source <<< "$line"
@@ -302,6 +304,7 @@ generate_report() {
         echo "**Duration:** $(format_duration ${duration})  "
         echo "**OS Detection:** ${osType:-unknown}  "
         echo "**Scan Type:** ${TYPE}  "
+        echo "**Scan Profile:** ${SCAN_PROFILE:-normal}  "
         echo ""
 
         # Open Ports table
@@ -350,14 +353,16 @@ generate_report() {
         fi
 
         # Recon Findings
-        if [ -d "recon" ] && [ "$(ls -A recon/ 2>/dev/null)" ]; then
+        if [ -d "recon" ] && [ -n "$(ls -A recon/ 2>/dev/null)" ]; then
             echo "## Recon Findings"
             echo ""
             local rfile
-            for rfile in recon/*; do
+            while IFS= read -r rfile; do
                 [ -f "$rfile" ] || continue
                 local rname
-                rname="$(basename "$rfile")"
+                # Path relative to recon/ so per-port files stay unique
+                # (e.g. 80/nikto_host.txt vs 443/nikto_host.txt).
+                rname="${rfile#recon/}"
                 local rstatus="completed"
                 local rdur=""
                 for key in "${!RECON_TOOL_STATUS[@]}"; do
@@ -383,7 +388,7 @@ generate_report() {
                 fi
                 echo '```'
                 echo ""
-            done
+            done < <(find recon -type f 2>/dev/null | LC_ALL=C sort)
         fi
 
         # Scan Phase Summary

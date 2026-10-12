@@ -27,6 +27,11 @@
 # ============================================================
 # DEFAULT_SCAN_TYPE=All          # Default scan type
 # AUTOPILOT=false                # Run without prompts
+# SCAN_PROFILE=normal            # stealth|normal|aggressive - preset timing.
+#                                #   stealth:    -T2, max-rate 100,  retries 2, scan-delay 200
+#                                #   normal:     -T4, max-rate 500,  retries 1, scan-delay 20
+#                                #   aggressive: -T5, max-rate 5000, retries 1, scan-delay 5
+#                                #   Explicit NMAP_* values below override the profile.
 
 # ============================================================
 # Fast Port Discovery (feeds the Full scan)
@@ -67,6 +72,8 @@
 #                                #   enables searchsploit --nmap and HTML reports
 # ENABLE_SEARCHSPLOIT=true       # Suggest searchsploit lookups against nmap XML
 # REPORT_HTML=false              # Also render summary.html from nmap XML (needs xsltproc)
+# RECON_PER_PORT_DIRS=false      # Group per-port recon output under recon/<port>/
+#                                #   (AutoRecon-style) instead of recon/<tool>_<host>_<port>.txt
 
 # ============================================================
 # Notifications (completion webhook)
