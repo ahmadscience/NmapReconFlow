@@ -55,3 +55,24 @@ allPorts="22,80"
 extraPorts=""
 cmpPorts
 assert_eq "" "$extraPorts" "cmpPorts: no extra ports when sets match"
+
+# --- is_ipv6 ---
+assert_exit 0 is_ipv6 "::1"
+assert_exit 0 is_ipv6 "2001:db8::1"
+assert_exit 0 is_ipv6 "fe80::1"
+assert_exit 1 is_ipv6 "10.0.0.1"
+assert_exit 1 is_ipv6 "example.com"
+
+# --- is_cidr ---
+assert_exit 0 is_cidr "10.0.0.0/24"
+assert_exit 0 is_cidr "192.168.1.0/16"
+assert_exit 0 is_cidr "2001:db8::/64"
+assert_exit 1 is_cidr "10.0.0.1"
+assert_exit 1 is_cidr "example.com"
+
+# --- nmap_output_flags (from config.sh) ---
+NMAP_XML=true
+assert_eq "-oN nmap/Port_h.nmap -oX nmap/Port_h.xml" "$(nmap_output_flags nmap/Port_h)" "nmap_output_flags: XML on"
+NMAP_XML=false
+assert_eq "-oN nmap/Port_h.nmap" "$(nmap_output_flags nmap/Port_h)" "nmap_output_flags: XML off"
+NMAP_XML=true

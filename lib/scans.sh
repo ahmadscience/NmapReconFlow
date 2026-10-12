@@ -1,6 +1,59 @@
 #!/usr/bin/env bash
 # NmapReconFlow - Nmap scan functions
 
+# Fast full-range port discovery feeding nmap.
+# Echoes a comma-separated open-port list on success, nothing otherwise.
+# Controlled by FAST_DISCOVERY (none|rustscan|naabu|masscan).
+fastDiscovery() {
+    local host="$1"
+    [ "${FAST_DISCOVERY:-none}" = "none" ] && return 1
+
+    local tool="${FAST_DISCOVERY}"
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+        log_warning "FAST_DISCOVERY=${tool} but ${tool} not found; falling back to nmap -p-"
+        return 1
+    fi
+
+    local outfile="nmap/FastDiscovery_${host}.txt"
+    printf "${YELLOW}Fast port discovery with ${tool}...${NC}\n" >&2
+
+    if $DRY_RUN; then
+        printf "${YELLOW}[DRY-RUN] Would run ${tool} discovery on ${host}${NC}\n" >&2
+        return 1
+    fi
+
+    local ports=""
+    case "${tool}" in
+        rustscan)
+            run_with_timeout "${TIMEOUT_NMAP_PORT}" "rustscan" \
+                rustscan -a "${host}" -g --ulimit 5000 >"${outfile}" 2>/dev/null || true
+            # rustscan -g form: "host -> [22,80,443]"
+            ports="$(sed -n 's/.*-> \[\(.*\)\].*/\1/p' "${outfile}" | head -n 1)"
+            ;;
+        naabu)
+            run_with_timeout "${TIMEOUT_NMAP_PORT}" "naabu" \
+                naabu -host "${host}" -silent -rate "${FAST_DISCOVERY_RATE}" >"${outfile}" 2>/dev/null || true
+            # naabu lines: "host:port"
+            ports="$(awk -F: 'NF>1{print $NF}' "${outfile}" | paste -sd, -)"
+            ;;
+        masscan)
+            run_with_timeout "${TIMEOUT_NMAP_PORT}" "masscan" \
+                masscan "${host}" -p1-65535 --rate "${FAST_DISCOVERY_RATE}" >"${outfile}" 2>/dev/null || true
+            # masscan lines: "Discovered open port 80/tcp on ..."
+            ports="$(sed -n 's/.*port \([0-9]*\)\/.*/\1/p' "${outfile}" | paste -sd, -)"
+            ;;
+    esac
+
+    if [ -n "${ports}" ]; then
+        printf "${GREEN}Fast discovery found ports: ${ports}${NC}\n" >&2
+        printf '%s' "${ports}"
+        return 0
+    fi
+
+    log_warning "Fast discovery found no ports; falling back to nmap -p-"
+    return 1
+}
+
 networkScan() {
     printf "${GREEN}---------------------Starting Network Scan---------------------\n"
     printf "${NC}\n"
@@ -12,7 +65,7 @@ networkScan() {
         nmapProgressBar "nmap/Network_${HOST}.nmap" 1 "${TIMEOUT_NMAP_PORT}" \
             ${nmapType} -T"${NMAP_TIMING}" --max-retries "${NMAP_MAX_RETRIES}" \
             --max-scan-delay "${NMAP_MAX_SCAN_DELAY}" -n -sn \
-            -oN "nmap/Network_${HOST}.nmap" "${subnet}/24"
+            $(nmap_output_flags "nmap/Network_${HOST}") "${subnet}/24"
         printf "${YELLOW}Found the following live hosts:${NC}\n\n"
         grep -v '#' "nmap/Network_${HOST}.nmap" | grep "$(echo "$subnet" | sed 's/..$//')" | awk '{print $5}'
     elif $pingable; then
@@ -44,7 +97,7 @@ portScan() {
         nmapProgressBar "nmap/Port_${HOST}.nmap" 1 "${TIMEOUT_NMAP_PORT}" \
             ${nmapType} -T"${NMAP_TIMING}" --max-retries "${NMAP_MAX_RETRIES}" \
             --max-scan-delay "${NMAP_MAX_SCAN_DELAY}" --open \
-            -oN "nmap/Port_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+            $(nmap_output_flags "nmap/Port_${HOST}") "${HOST}" ${DNSSTRING}
         assignPorts "${HOST}"
     else
         printf "${YELLOW}Port Scan is not implemented yet in Remote mode.\n${NC}"
@@ -65,7 +118,7 @@ scriptScan() {
         else
             nmapProgressBar "nmap/Script_${HOST}.nmap" 2 "${TIMEOUT_NMAP_SCRIPT}" \
                 ${nmapType} -sCV -p"${commonPorts}" --open \
-                -oN "nmap/Script_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                $(nmap_output_flags "nmap/Script_${HOST}") "${HOST}" ${DNSSTRING}
         fi
 
         if [ -f "nmap/Script_${HOST}.nmap" ] && grep -q "Service Info: OS:" "nmap/Script_${HOST}.nmap"; then
@@ -93,11 +146,16 @@ fullScan() {
     printf "${NC}\n"
 
     if ! $REMOTE; then
+        local portSpec="-p-"
+        local discovered
+        if discovered="$(fastDiscovery "${HOST}")"; then
+            portSpec="-p${discovered}"
+        fi
         nmapProgressBar "nmap/Full_${HOST}.nmap" 3 "${TIMEOUT_NMAP_FULL}" \
-            ${nmapType} -p- --max-retries "${NMAP_MAX_RETRIES}" \
+            ${nmapType} ${portSpec} --max-retries "${NMAP_MAX_RETRIES}" \
             --max-rate "${NMAP_MAX_RATE}" --max-scan-delay "${NMAP_MAX_SCAN_DELAY}" \
             -T"${NMAP_TIMING}" -v --open \
-            -oN "nmap/Full_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+            $(nmap_output_flags "nmap/Full_${HOST}") "${HOST}" ${DNSSTRING}
         assignPorts "${HOST}"
 
         if [ -z "${commonPorts}" ]; then
@@ -107,7 +165,7 @@ fullScan() {
             printf "${NC}\n"
             nmapProgressBar "nmap/Full_Extra_${HOST}.nmap" 2 "${TIMEOUT_NMAP_SCRIPT}" \
                 ${nmapType} -sCV -p"${allPorts}" --open \
-                -oN "nmap/Full_Extra_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                $(nmap_output_flags "nmap/Full_Extra_${HOST}") "${HOST}" ${DNSSTRING}
             assignPorts "${HOST}"
         else
             cmpPorts
@@ -124,7 +182,7 @@ fullScan() {
                 printf "${NC}\n"
                 nmapProgressBar "nmap/Full_Extra_${HOST}.nmap" 2 "${TIMEOUT_NMAP_SCRIPT}" \
                     ${nmapType} -sCV -p"${extraPorts}" --open \
-                    -oN "nmap/Full_Extra_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                    $(nmap_output_flags "nmap/Full_Extra_${HOST}") "${HOST}" ${DNSSTRING}
                 assignPorts "${HOST}"
             fi
         fi
@@ -150,7 +208,7 @@ UDPScan() {
 
         nmapProgressBar "nmap/UDP_${HOST}.nmap" 3 "${TIMEOUT_NMAP_UDP}" \
             sudo ${nmapType} -sU --max-retries "${NMAP_MAX_RETRIES}" --open \
-            -oN "nmap/UDP_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+            $(nmap_output_flags "nmap/UDP_${HOST}") "${HOST}" ${DNSSTRING}
         assignPorts "${HOST}"
 
         if [ -n "${udpPorts}" ]; then
@@ -166,12 +224,12 @@ UDPScan() {
                 nmapProgressBar "nmap/UDP_Extra_${HOST}.nmap" 2 "${TIMEOUT_NMAP_SCRIPT}" \
                     sudo ${nmapType} -sCVU --script vulners \
                     --script-args "mincvss=${NMAP_MIN_CVSS}" -p"${udpPorts}" --open \
-                    -oN "nmap/UDP_Extra_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                    $(nmap_output_flags "nmap/UDP_Extra_${HOST}") "${HOST}" ${DNSSTRING}
             else
                 sudo -v
                 nmapProgressBar "nmap/UDP_Extra_${HOST}.nmap" 2 "${TIMEOUT_NMAP_SCRIPT}" \
                     sudo ${nmapType} -sCVU -p"${udpPorts}" --open \
-                    -oN "nmap/UDP_Extra_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                    $(nmap_output_flags "nmap/UDP_Extra_${HOST}") "${HOST}" ${DNSSTRING}
             fi
         else
             echo
@@ -215,7 +273,7 @@ vulnsScan() {
             nmapProgressBar "nmap/CVEs_${HOST}.nmap" 3 "${TIMEOUT_NMAP_VULNS}" \
                 ${nmapType} -sV --script vulners \
                 --script-args "mincvss=${NMAP_MIN_CVSS}" -p"${ports}" --open \
-                -oN "nmap/CVEs_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+                $(nmap_output_flags "nmap/CVEs_${HOST}") "${HOST}" ${DNSSTRING}
             echo
         fi
 
@@ -225,7 +283,7 @@ vulnsScan() {
         printf "${NC}\n"
         nmapProgressBar "nmap/Vulns_${HOST}.nmap" 3 "${TIMEOUT_NMAP_VULNS}" \
             ${nmapType} -sV --script vuln -p"${ports}" --open \
-            -oN "nmap/Vulns_${HOST}.nmap" "${HOST}" ${DNSSTRING}
+            $(nmap_output_flags "nmap/Vulns_${HOST}") "${HOST}" ${DNSSTRING}
     else
         printf "${YELLOW}Vulns Scan is not supported in Remote mode.\n${NC}"
     fi

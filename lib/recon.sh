@@ -229,11 +229,54 @@ reconRecommend() {
         fi
     fi
 
+    # Searchsploit against nmap XML (offline, non-intrusive). Requires XML output.
+    if [ "${ENABLE_SEARCHSPLOIT}" = "true" ] && ! is_tool_skipped "searchsploit"; then
+        local xml=""
+        [ -f "nmap/Script_${HOST}.xml" ] && xml="nmap/Script_${HOST}.xml"
+        [ -f "nmap/Full_Extra_${HOST}.xml" ] && xml="nmap/Full_Extra_${HOST}.xml"
+        if [ -n "${xml}" ]; then
+            printf "${NC}\n"
+            printf "${YELLOW}Exploit DB Recon:\n"
+            printf "${NC}\n"
+            echo "searchsploit --nmap \"${xml}\" | tee \"recon/searchsploit_${HOST}.txt\""
+            echo
+        fi
+    fi
+
+    # Intrusive follow-ups go to a manual-commands file rather than auto-run,
+    # to avoid account lockouts / noisy brute force during unattended scans.
+    suggest_manual_followups "${file}"
+
     IFS="${origIFS}"
 
     echo
     echo
     echo
+}
+
+# Record intrusive, human-in-the-loop commands to recon/_manual_commands.txt.
+suggest_manual_followups() {
+    local file="$1"
+    local manual="recon/_manual_commands.txt"
+    mkdir -p recon/ 2>/dev/null
+
+    local -a lines=()
+    echo "${file}" | grep -q "22/tcp"  && lines+=("# SSH brute force (set USER/PASS lists):" "hydra -L users.txt -P passwords.txt ssh://${HOST}")
+    echo "${file}" | grep -q "21/tcp"  && lines+=("# FTP brute force / anonymous check:" "hydra -L users.txt -P passwords.txt ftp://${HOST}" "ftp ${HOST}  # try anonymous:anonymous")
+    echo "${file}" | grep -q "3389/tcp" && lines+=("# RDP brute force:" "hydra -L users.txt -P passwords.txt rdp://${HOST}")
+    echo "${file}" | grep -i -q http    && lines+=("# Web auth brute force (adjust path/form):" "hydra -L users.txt -P passwords.txt ${HOST} http-get /")
+    echo "${file}" | grep -q "445/tcp"  && lines+=("# SMB password spray (lockout risk):" "crackmapexec smb ${HOST} -u users.txt -p passwords.txt")
+
+    [ ${#lines[@]} -eq 0 ] && return 0
+
+    {
+        echo "# ==== Manual follow-ups for ${HOST} ($(date '+%Y-%m-%d %H:%M')) ===="
+        echo "# These are intrusive (brute force / spraying). Review scope & lockout policy first."
+        local l
+        for l in "${lines[@]}"; do echo "$l"; done
+        echo
+    } >> "${manual}"
+    printf "${YELLOW}Manual follow-up commands written to recon/_manual_commands.txt${NC}\n" >&2
 }
 
 recon() {

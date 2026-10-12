@@ -11,7 +11,24 @@ is_valid_scan_type() {
 }
 
 validate_host_safe() {
-    [[ "$1" =~ ^[a-zA-Z0-9._:-]+$ ]]
+    [[ "$1" =~ ^[a-zA-Z0-9._:/-]+$ ]]
+}
+
+# True if the argument is an IPv6 address (at least two colons).
+is_ipv6() {
+    [[ "$1" =~ ^[0-9a-fA-F:]+:[0-9a-fA-F:]*$ ]] && [[ "$1" == *:*:* ]]
+}
+
+# True if the argument is a CIDR range (IPv4 or IPv6).
+is_cidr() {
+    [[ "$1" == */* ]] && [[ "$1" =~ ^[0-9a-fA-F.:]+/[0-9]{1,3}$ ]]
+}
+
+# Expand a CIDR range into individual host IPs, one per line, via nmap -sL.
+expand_cidr() {
+    local spec="$1"
+    ${NMAPPATH:-nmap} -n -sL "${spec}" 2>/dev/null \
+        | awk '/Nmap scan report for/{print $NF}'
 }
 
 # Test whether the host is pingable, return $nmapType and $ttl
@@ -120,6 +137,12 @@ header() {
     kernel="$(uname -s)"
     checkPingResult="$(checkPing "${urlIP:-$HOST}")"
     nmapType="$(echo "${checkPingResult}" | head -n 1)"
+
+    # IPv6 targets need nmap's -6 flag
+    if is_ipv6 "${urlIP:-$HOST}"; then
+        nmapType="${nmapType} -6"
+        printf "${GREEN}IPv6 target detected; enabling nmap -6${NC}\n"
+    fi
 
     if [[ "${nmapType}" == *"-Pn" ]]; then
         pingable=false

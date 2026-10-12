@@ -36,7 +36,7 @@ usage() {
     printf "${RED}Usage: $(basename "$0") -H/--host ${NC}<TARGET-IP>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${RED}       $(basename "$0") -f/--file ${NC}<TARGETS-FILE>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${YELLOW}\nRequired:\n"
-    printf "${YELLOW}  -H, --host ${NC}<TARGET>       ${YELLOW}Target IP or hostname\n"
+    printf "${YELLOW}  -H, --host ${NC}<TARGET>       ${YELLOW}Target IP, hostname, IPv6, or CIDR (CIDR runs as a campaign)\n"
     printf "${YELLOW}  -f, --file ${NC}<FILE>         ${YELLOW}File with targets (one per line)\n"
     printf "${YELLOW}  -t, --type ${NC}<TYPE>         ${YELLOW}Scan type (see below)\n"
     printf "${YELLOW}\nOptional:\n"
@@ -150,8 +150,29 @@ if [ -z "${TYPE}" ] || [ -z "${HOST}" ]; then
     usage
 fi
 
-# Validate host format
+# CIDR range: expand into a campaign of individual hosts
+if is_cidr "${HOST}"; then
+    if ! is_valid_scan_type "${TYPE}"; then
+        printf "${RED}Invalid scan type: ${TYPE}\n${NC}"
+        usage
+    fi
+    _cidr_targets="$(mktemp "${TMPDIR:-/tmp}/nmaprf_targets.XXXXXX")"
+    expand_cidr "${HOST}" > "${_cidr_targets}"
+    if [ ! -s "${_cidr_targets}" ]; then
+        rm -f "${_cidr_targets}"
+        printf "${RED}\nCould not expand CIDR range: ${HOST}\n${NC}"
+        usage
+    fi
+    printf "${GREEN}Expanded ${HOST} into $(wc -l < "${_cidr_targets}") hosts; running as campaign.${NC}\n"
+    run_campaign "${_cidr_targets}"
+    _rc=$?
+    rm -f "${_cidr_targets}"
+    exit ${_rc}
+fi
+
+# Validate host format (IPv4, IPv6, or hostname)
 if ! [[ "${HOST}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && \
+   ! is_ipv6 "${HOST}" && \
    ! [[ "${HOST}" =~ ^(([[:alnum:]-]{1,63}\.)*[[:alpha:]]{2,6})$ ]]; then
     printf "${RED}\nInvalid IP or URL!\n${NC}"
     usage

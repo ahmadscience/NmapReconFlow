@@ -109,6 +109,27 @@ set_defaults() {
     : "${REPORT_MAX_TOOL_OUTPUT:=200}"
     : "${REPORT_FORMAT:=markdown}"
     : "${DRY_RUN:=false}"
+
+    # Nmap XML output alongside -oN (enables HTML report + searchsploit)
+    : "${NMAP_XML:=true}"
+
+    # Fast port discovery feeding nmap: none|rustscan|naabu|masscan
+    : "${FAST_DISCOVERY:=none}"
+    : "${FAST_DISCOVERY_RATE:=1000}"
+
+    # Suggest searchsploit lookups on detected service versions
+    : "${ENABLE_SEARCHSPLOIT:=true}"
+}
+
+# Build the nmap output flags for a given basename (without extension).
+# Honors NMAP_XML. Echoes flags to be word-split into an nmap arg list.
+nmap_output_flags() {
+    local base="$1"
+    if [ "${NMAP_XML}" = "true" ]; then
+        printf -- '-oN %s.nmap -oX %s.xml' "${base}" "${base}"
+    else
+        printf -- '-oN %s.nmap' "${base}"
+    fi
 }
 
 load_config() {
