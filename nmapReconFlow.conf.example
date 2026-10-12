@@ -29,6 +29,15 @@
 # AUTOPILOT=false                # Run without prompts
 
 # ============================================================
+# Fast Port Discovery (feeds the Full scan)
+# ============================================================
+# FAST_DISCOVERY=none            # none|rustscan|naabu|masscan - quickly find open
+#                                #   ports, then nmap only scans those (much faster
+#                                #   Full scans). Falls back to nmap -p- if the tool
+#                                #   is missing or finds nothing.
+# FAST_DISCOVERY_RATE=1000       # Packets/sec for naabu/masscan discovery
+
+# ============================================================
 # Multi-Target Campaigns
 # ============================================================
 # CAMPAIGN_PARALLEL=1            # Targets in parallel (1 = sequential)
@@ -53,3 +62,7 @@
 # ============================================================
 # GENERATE_REPORT=true           # Generate summary.md after scans
 # REPORT_MAX_TOOL_OUTPUT=200     # Max lines per tool in report
+# REPORT_FORMAT=markdown         # markdown|json|both
+# NMAP_XML=true                  # Also write nmap XML (-oX) alongside -oN;
+#                                #   enables searchsploit --nmap and HTML reports
+# ENABLE_SEARCHSPLOIT=true       # Suggest searchsploit lookups against nmap XML

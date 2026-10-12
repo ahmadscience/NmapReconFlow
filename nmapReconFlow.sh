@@ -24,6 +24,7 @@ install_signal_handlers
 elapsedStart="$(date +%s)"
 REMOTE=false
 AUTOPILOT=false
+RESUME_SCAN=false
 TARGETS_FILE=""
 CLI_CONFIG=""
 POSITIONAL=""
@@ -35,7 +36,7 @@ usage() {
     printf "${RED}Usage: $(basename "$0") -H/--host ${NC}<TARGET-IP>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${RED}       $(basename "$0") -f/--file ${NC}<TARGETS-FILE>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${YELLOW}\nRequired:\n"
-    printf "${YELLOW}  -H, --host ${NC}<TARGET>       ${YELLOW}Target IP or hostname\n"
+    printf "${YELLOW}  -H, --host ${NC}<TARGET>       ${YELLOW}Target IP, hostname, IPv6, or CIDR (CIDR runs as a campaign)\n"
     printf "${YELLOW}  -f, --file ${NC}<FILE>         ${YELLOW}File with targets (one per line)\n"
     printf "${YELLOW}  -t, --type ${NC}<TYPE>         ${YELLOW}Scan type (see below)\n"
     printf "${YELLOW}\nOptional:\n"
@@ -46,7 +47,10 @@ usage() {
     printf "${YELLOW}  -r, --remote               ${NC}Remote mode (limited scans)\n"
     printf "${YELLOW}  -c, --config ${NC}<FILE>        ${YELLOW}Config file path\n"
     printf "${YELLOW}  -P, --parallel ${NC}<N>         ${YELLOW}Campaign parallelism (default: 1)\n"
+    printf "${YELLOW}  --resume                   ${NC}Resume a previously interrupted scan\n"
     printf "${YELLOW}  --no-report                ${NC}Skip summary.md generation\n"
+    printf "${YELLOW}  --format ${NC}<FORMAT>          ${YELLOW}Report format: markdown, json, or both (default: markdown)\n"
+    printf "${YELLOW}  --dry-run                  ${NC}Show what would be executed without running scans\n"
     printf "${YELLOW}  -v, --version              ${NC}Print version\n"
     printf "${YELLOW}  -h, --help                 ${NC}Show this help\n"
     printf "${YELLOW}\nScan Types:\n"
@@ -88,6 +92,12 @@ while [ $# -gt 0 ]; do
             CLI_CONFIG="$2"; shift; shift ;;
         --no-report)
             GENERATE_REPORT=false; shift ;;
+        --format)
+            REPORT_FORMAT="$2"; shift; shift ;;
+        --dry-run)
+            DRY_RUN=true; shift ;;
+        --resume)
+            RESUME_SCAN=true; shift ;;
         -v|--version)
             echo "NmapReconFlow v${NMAPRF_VERSION}"; exit 0 ;;
         -h|--help)
@@ -126,7 +136,7 @@ if [ -n "${TARGETS_FILE}" ]; then
         printf "${RED}Scan type is required. Use -t/--type <TYPE>\n${NC}"
         usage
     fi
-    if ! case "${TYPE}" in [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr]econ|[Aa]ll) false;; esac then
+    if is_valid_scan_type "${TYPE}"; then
         run_campaign "${TARGETS_FILE}"
         exit $?
     else
@@ -140,15 +150,41 @@ if [ -z "${TYPE}" ] || [ -z "${HOST}" ]; then
     usage
 fi
 
-# Validate host format
+# CIDR range: expand into a campaign of individual hosts
+if is_cidr "${HOST}"; then
+    if ! is_valid_scan_type "${TYPE}"; then
+        printf "${RED}Invalid scan type: ${TYPE}\n${NC}"
+        usage
+    fi
+    _cidr_targets="$(mktemp "${TMPDIR:-/tmp}/nmaprf_targets.XXXXXX")"
+    expand_cidr "${HOST}" > "${_cidr_targets}"
+    if [ ! -s "${_cidr_targets}" ]; then
+        rm -f "${_cidr_targets}"
+        printf "${RED}\nCould not expand CIDR range: ${HOST}\n${NC}"
+        usage
+    fi
+    printf "${GREEN}Expanded ${HOST} into $(wc -l < "${_cidr_targets}") hosts; running as campaign.${NC}\n"
+    run_campaign "${_cidr_targets}"
+    _rc=$?
+    rm -f "${_cidr_targets}"
+    exit ${_rc}
+fi
+
+# Validate host format (IPv4, IPv6, or hostname)
 if ! [[ "${HOST}" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]] && \
+   ! is_ipv6 "${HOST}" && \
    ! [[ "${HOST}" =~ ^(([[:alnum:]-]{1,63}\.)*[[:alpha:]]{2,6})$ ]]; then
     printf "${RED}\nInvalid IP or URL!\n${NC}"
     usage
 fi
 
+if ! validate_host_safe "${HOST}"; then
+    printf "${RED}\nHost contains unsafe characters!\n${NC}"
+    usage
+fi
+
 # Validate scan type
-if ! case "${TYPE}" in [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr]econ|[Aa]ll) false;; esac then
+if is_valid_scan_type "${TYPE}"; then
     mkdir -p "${OUTPUTDIR}" && cd "${OUTPUTDIR}" && mkdir -p nmap/ || usage
 
     main() {
@@ -156,86 +192,158 @@ if ! case "${TYPE}" in [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr
         init_phases "${TYPE}"
         header
 
+        if $RESUME_SCAN; then
+            load_phase_state
+        fi
+
         case "${TYPE}" in
             [Nn]etwork)
-                start_phase "Network"
-                networkScan "${HOST}"
-                end_phase "Network" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Network"; then
+                    start_phase "Network"
+                    networkScan "${HOST}"
+                    end_phase "Network" $?
+                else
+                    skip_phase "Network" "resumed"
+                fi
                 ;;
             [Pp]ort)
-                start_phase "Port"
-                portScan "${HOST}"
-                end_phase "Port" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Port"; then
+                    start_phase "Port"
+                    portScan "${HOST}"
+                    end_phase "Port" $?
+                else
+                    skip_phase "Port" "resumed"
+                fi
                 ;;
             [Ss]cript)
                 if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
-                    start_phase "Port"
-                    portScan "${HOST}"
-                    end_phase "Port" $?
+                    if ! $RESUME_SCAN || ! is_phase_completed "Port"; then
+                        start_phase "Port"
+                        portScan "${HOST}"
+                        end_phase "Port" $?
+                    else
+                        skip_phase "Port" "resumed"
+                    fi
                 fi
-                start_phase "Script"
-                scriptScan "${HOST}"
-                end_phase "Script" $?
-                ;;
-            [Ff]ull)
-                start_phase "Full"
-                fullScan "${HOST}"
-                end_phase "Full" $?
-                ;;
-            [Uu][Dd][Pp])
-                start_phase "UDP"
-                UDPScan "${HOST}"
-                end_phase "UDP" $?
-                ;;
-            [Vv]ulns)
-                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
-                    start_phase "Port"
-                    portScan "${HOST}"
-                    end_phase "Port" $?
-                fi
-                start_phase "Vulns"
-                vulnsScan "${HOST}"
-                end_phase "Vulns" $?
-                ;;
-            [Rr]econ)
-                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
-                    start_phase "Port"
-                    portScan "${HOST}"
-                    end_phase "Port" $?
-                fi
-                if [ ! -f "nmap/Script_${HOST}.nmap" ]; then
+                if ! $RESUME_SCAN || ! is_phase_completed "Script"; then
                     start_phase "Script"
                     scriptScan "${HOST}"
                     end_phase "Script" $?
+                else
+                    skip_phase "Script" "resumed"
                 fi
-                start_phase "Recon"
-                recon "${HOST}"
-                end_phase "Recon" $?
+                ;;
+            [Ff]ull)
+                if ! $RESUME_SCAN || ! is_phase_completed "Full"; then
+                    start_phase "Full"
+                    fullScan "${HOST}"
+                    end_phase "Full" $?
+                else
+                    skip_phase "Full" "resumed"
+                fi
+                ;;
+            [Uu][Dd][Pp])
+                if ! $RESUME_SCAN || ! is_phase_completed "UDP"; then
+                    start_phase "UDP"
+                    UDPScan "${HOST}"
+                    end_phase "UDP" $?
+                else
+                    skip_phase "UDP" "resumed"
+                fi
+                ;;
+            [Vv]ulns)
+                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
+                    if ! $RESUME_SCAN || ! is_phase_completed "Port"; then
+                        start_phase "Port"
+                        portScan "${HOST}"
+                        end_phase "Port" $?
+                    else
+                        skip_phase "Port" "resumed"
+                    fi
+                fi
+                if ! $RESUME_SCAN || ! is_phase_completed "Vulns"; then
+                    start_phase "Vulns"
+                    vulnsScan "${HOST}"
+                    end_phase "Vulns" $?
+                else
+                    skip_phase "Vulns" "resumed"
+                fi
+                ;;
+            [Rr]econ)
+                if [ ! -f "nmap/Port_${HOST}.nmap" ]; then
+                    if ! $RESUME_SCAN || ! is_phase_completed "Port"; then
+                        start_phase "Port"
+                        portScan "${HOST}"
+                        end_phase "Port" $?
+                    else
+                        skip_phase "Port" "resumed"
+                    fi
+                fi
+                if [ ! -f "nmap/Script_${HOST}.nmap" ]; then
+                    if ! $RESUME_SCAN || ! is_phase_completed "Script"; then
+                        start_phase "Script"
+                        scriptScan "${HOST}"
+                        end_phase "Script" $?
+                    else
+                        skip_phase "Script" "resumed"
+                    fi
+                fi
+                if ! $RESUME_SCAN || ! is_phase_completed "Recon"; then
+                    start_phase "Recon"
+                    recon "${HOST}"
+                    end_phase "Recon" $?
+                else
+                    skip_phase "Recon" "resumed"
+                fi
                 ;;
             [Aa]ll)
-                start_phase "Port"
-                portScan "${HOST}"
-                end_phase "Port" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Port"; then
+                    start_phase "Port"
+                    portScan "${HOST}"
+                    end_phase "Port" $?
+                else
+                    skip_phase "Port" "resumed"
+                fi
 
-                start_phase "Script"
-                scriptScan "${HOST}"
-                end_phase "Script" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Script"; then
+                    start_phase "Script"
+                    scriptScan "${HOST}"
+                    end_phase "Script" $?
+                else
+                    skip_phase "Script" "resumed"
+                fi
 
-                start_phase "Full"
-                fullScan "${HOST}"
-                end_phase "Full" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Full"; then
+                    start_phase "Full"
+                    fullScan "${HOST}"
+                    end_phase "Full" $?
+                else
+                    skip_phase "Full" "resumed"
+                fi
 
-                start_phase "UDP"
-                UDPScan "${HOST}"
-                end_phase "UDP" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "UDP"; then
+                    start_phase "UDP"
+                    UDPScan "${HOST}"
+                    end_phase "UDP" $?
+                else
+                    skip_phase "UDP" "resumed"
+                fi
 
-                start_phase "Vulns"
-                vulnsScan "${HOST}"
-                end_phase "Vulns" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Vulns"; then
+                    start_phase "Vulns"
+                    vulnsScan "${HOST}"
+                    end_phase "Vulns" $?
+                else
+                    skip_phase "Vulns" "resumed"
+                fi
 
-                start_phase "Recon"
-                recon "${HOST}"
-                end_phase "Recon" $?
+                if ! $RESUME_SCAN || ! is_phase_completed "Recon"; then
+                    start_phase "Recon"
+                    recon "${HOST}"
+                    end_phase "Recon" $?
+                else
+                    skip_phase "Recon" "resumed"
+                fi
                 ;;
         esac
 

@@ -16,6 +16,14 @@ NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
 - **Signal handling** — Ctrl+C cleans up all background processes. No more orphaned nmap jobs.
 - **Cross-platform** — works on macOS, Kali Linux, and Ubuntu.
 - **Configurable** — rate limits, timeouts, wordlist paths, tool preferences via config file.
+- **Fast port discovery** — optionally feed the Full scan with rustscan/naabu/masscan so nmap only scans open ports (minutes → seconds).
+- **CIDR & IPv6 targets** — `-H 10.0.0.0/24` auto-expands into a campaign; IPv6 targets scanned with `nmap -6`.
+- **JSON output** — `--format json` (or `both`) writes `summary.json` for tooling.
+- **Nmap XML** — `-oX` written alongside `-oN`, enabling `searchsploit --nmap` and HTML reports.
+- **searchsploit** — offline Exploit-DB lookup against the scan's XML.
+- **Manual-commands file** — intrusive follow-ups (brute force, spraying) are written to `recon/_manual_commands.txt` instead of auto-running.
+- **Dry-run & resume** — `--dry-run` previews commands; `--resume` skips already-completed phases.
+- **Docker & installer** — `Dockerfile` (Kali + tools) and `install.sh`.
 
 ## Features
 
@@ -120,9 +128,15 @@ Optional:
   -r, --remote              Remote mode (limited scans)
   -c, --config <FILE>       Config file path
   -P, --parallel <N>        Campaign parallelism (default: 1)
+  --resume                  Resume a previously interrupted scan
   --no-report               Skip summary.md generation
+  --format <FORMAT>         Report format: markdown, json, or both
+  --dry-run                 Show what would run without executing
   -v, --version             Print version
 ```
+
+`-H` also accepts a CIDR range (e.g. `10.0.0.0/24`), which is expanded and run
+as a campaign, and IPv6 addresses (scanned with `nmap -6`).
 
 ### Examples
 ```bash
@@ -156,11 +170,15 @@ target_ip/
     CVEs_target.nmap
     Vulns_target.nmap
     Recon_target.nmap
+    Port_target.xml             # Nmap XML (when NMAP_XML=true)
   recon/
     nikto_target_80.txt
     ffuf_target_80.txt
+    searchsploit_target.txt
+    _manual_commands.txt        # Intrusive follow-ups to run by hand
     ...
   summary.md                    # Human + AI readable report
+  summary.json                  # Machine-readable (when --format json/both)
   nmapReconFlow_target_All.txt  # Full console output
 ```
 

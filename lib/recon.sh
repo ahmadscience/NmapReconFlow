@@ -89,12 +89,20 @@ reconRecommend() {
                 fi
 
                 if command -v ffuf >/dev/null 2>&1 && ! is_tool_skipped "ffuf"; then
-                    extensions="$(echo 'index' >./index && ffuf -s -w ./index:FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u "${urlType}${HOST}:${port}/FUZZ" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm -f ./index)"
+                    local tmpindex
+                    tmpindex="$(mktemp ./index.XXXXXX)"
+                    echo 'index' >"$tmpindex"
+                    extensions="$(ffuf -s -w "${tmpindex}":FUZZ -mc '200,302' -e '.asp,.aspx,.html,.jsp,.php' -u "${urlType}${HOST}:${port}/FUZZ" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/,$//')"
+                    rm -f "$tmpindex"
                     local rate_flag=""
                     [ "${FFUF_RATE:-0}" -gt 0 ] 2>/dev/null && rate_flag="-rate ${FFUF_RATE}"
                     echo "ffuf -ic -w \"${dirb_wordlist}\" -e '${extensions}' ${rate_flag} -u \"${urlType}${HOST}:${port}/FUZZ\" | tee \"recon/ffuf_${HOST}_${port}.txt\""
                 elif command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
-                    extensions="$(echo 'index' >./index && gobuster dir -w ./index -t ${GOBUSTER_THREADS} -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/.$//' && rm -f ./index)"
+                    local tmpindex
+                    tmpindex="$(mktemp ./index.XXXXXX)"
+                    echo 'index' >"$tmpindex"
+                    extensions="$(gobuster dir -w "${tmpindex}" -t ${GOBUSTER_THREADS} -qnkx '.asp,.aspx,.html,.jsp,.php' -s '200,302' -u "${urlType}${HOST}:${port}" 2>/dev/null | awk -vORS=, -F 'index' '{print $2}' | sed 's/,$//')"
+                    rm -f "$tmpindex"
                     echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -ekx '${extensions}' -u \"${urlType}${HOST}:${port}\" -o \"recon/gobuster_${HOST}_${port}.txt\""
                 fi
                 echo
@@ -111,13 +119,15 @@ reconRecommend() {
                     local port
                     port="$(sed -n 'H;x;s/\/.*'"${cms_line}"'.*//p' "nmap/Script_${HOST}.nmap")"
 
-                    if ! case "${cms}" in Joomla|WordPress|Drupal) false;; esac then
-                        printf "${NC}\n"
-                        printf "${YELLOW}CMS Recon:\n"
-                        printf "${NC}\n"
-                    fi
-                    case "${cms}" in
-                        Joomla!)
+                    case "${cms_line}" in
+                        Joomla*|WordPress|Drupal)
+                            printf "${NC}\n"
+                            printf "${YELLOW}CMS Recon:\n"
+                            printf "${NC}\n"
+                            ;;
+                    esac
+                    case "${cms_line}" in
+                        Joomla*)
                             ! is_tool_skipped "joomscan" && echo "joomscan --url \"${HOST}:${port}\" | tee \"recon/joomscan_${HOST}_${port}.txt\""
                             ;;
                         WordPress)
@@ -136,6 +146,33 @@ reconRecommend() {
         fi
     fi
 
+    # Non-standard web port detection
+    if [ -n "${EXTRA_WEB_PORTS}" ]; then
+        local IFS=','
+        local extra_port
+        for extra_port in ${EXTRA_WEB_PORTS}; do
+            if echo "${file}" | grep -q "^${extra_port}/tcp" && \
+               ! echo "${file}" | grep -i -q "^${extra_port}/tcp.*http"; then
+                local urlType="http://"
+                case "${extra_port}" in
+                    *443*) urlType="https://" ;;
+                esac
+                printf "${NC}\n"
+                printf "${YELLOW}Detected non-standard web port ${extra_port}:\n"
+                printf "${NC}\n"
+                if command -v nikto >/dev/null 2>&1 && ! is_tool_skipped "nikto"; then
+                    echo "nikto -host \"${urlType}${HOST}:${extra_port}\" -maxtime ${TIMEOUT_RECON_DEFAULT}s | tee \"recon/nikto_${HOST}_${extra_port}.txt\""
+                fi
+                if command -v gobuster >/dev/null 2>&1 && ! is_tool_skipped "gobuster"; then
+                    local dirb_wordlist
+                    dirb_wordlist="$(find_wordlist "${WORDLIST_DIRB}")" || dirb_wordlist="/usr/share/wordlists/dirb/common.txt"
+                    echo "gobuster dir -w \"${dirb_wordlist}\" -t ${GOBUSTER_THREADS} -eku \"${urlType}${HOST}:${extra_port}\" -o \"recon/gobuster_${HOST}_${extra_port}.txt\""
+                fi
+                echo
+            fi
+        done
+    fi
+
     # SNMP recon
     if [ -f "nmap/UDP_Extra_${HOST}.nmap" ] && grep -q "161/udp.*open" "nmap/UDP_Extra_${HOST}.nmap"; then
         printf "${NC}\n"
@@ -152,8 +189,8 @@ reconRecommend() {
             printf "${NC}\n"
             printf "${YELLOW}LDAP Recon:\n"
             printf "${NC}\n"
-            echo "ldapsearch -x -h \"${HOST}\" -s base | tee \"recon/ldapsearch_${HOST}.txt\""
-            echo "ldapsearch -x -h \"${HOST}\" -b \"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d ' ' -f2)\" | tee \"recon/ldapsearch_DC_${HOST}.txt\""
+            echo "ldapsearch -x -H \"ldap://${HOST}\" -s base | tee \"recon/ldapsearch_${HOST}.txt\""
+            echo "ldapsearch -x -H \"ldap://${HOST}\" -b \"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d ' ' -f2)\" | tee \"recon/ldapsearch_DC_${HOST}.txt\""
             echo "nmap -Pn -p 389 --script ldap-search --script-args 'ldap.username=\"\$(grep rootDomainNamingContext \"recon/ldapsearch_${HOST}.txt\" | cut -d \" \" -f2)\"' \"${HOST}\" -oN \"recon/nmap_ldap_${HOST}.txt\""
             echo
         fi
@@ -192,11 +229,54 @@ reconRecommend() {
         fi
     fi
 
+    # Searchsploit against nmap XML (offline, non-intrusive). Requires XML output.
+    if [ "${ENABLE_SEARCHSPLOIT}" = "true" ] && ! is_tool_skipped "searchsploit"; then
+        local xml=""
+        [ -f "nmap/Script_${HOST}.xml" ] && xml="nmap/Script_${HOST}.xml"
+        [ -f "nmap/Full_Extra_${HOST}.xml" ] && xml="nmap/Full_Extra_${HOST}.xml"
+        if [ -n "${xml}" ]; then
+            printf "${NC}\n"
+            printf "${YELLOW}Exploit DB Recon:\n"
+            printf "${NC}\n"
+            echo "searchsploit --nmap \"${xml}\" | tee \"recon/searchsploit_${HOST}.txt\""
+            echo
+        fi
+    fi
+
+    # Intrusive follow-ups go to a manual-commands file rather than auto-run,
+    # to avoid account lockouts / noisy brute force during unattended scans.
+    suggest_manual_followups "${file}"
+
     IFS="${origIFS}"
 
     echo
     echo
     echo
+}
+
+# Record intrusive, human-in-the-loop commands to recon/_manual_commands.txt.
+suggest_manual_followups() {
+    local file="$1"
+    local manual="recon/_manual_commands.txt"
+    mkdir -p recon/ 2>/dev/null
+
+    local -a lines=()
+    echo "${file}" | grep -q "22/tcp"  && lines+=("# SSH brute force (set USER/PASS lists):" "hydra -L users.txt -P passwords.txt ssh://${HOST}")
+    echo "${file}" | grep -q "21/tcp"  && lines+=("# FTP brute force / anonymous check:" "hydra -L users.txt -P passwords.txt ftp://${HOST}" "ftp ${HOST}  # try anonymous:anonymous")
+    echo "${file}" | grep -q "3389/tcp" && lines+=("# RDP brute force:" "hydra -L users.txt -P passwords.txt rdp://${HOST}")
+    echo "${file}" | grep -i -q http    && lines+=("# Web auth brute force (adjust path/form):" "hydra -L users.txt -P passwords.txt ${HOST} http-get /")
+    echo "${file}" | grep -q "445/tcp"  && lines+=("# SMB password spray (lockout risk):" "crackmapexec smb ${HOST} -u users.txt -p passwords.txt")
+
+    [ ${#lines[@]} -eq 0 ] && return 0
+
+    {
+        echo "# ==== Manual follow-ups for ${HOST} ($(date '+%Y-%m-%d %H:%M')) ===="
+        echo "# These are intrusive (brute force / spraying). Review scope & lockout policy first."
+        local l
+        for l in "${lines[@]}"; do echo "$l"; done
+        echo
+    } >> "${manual}"
+    printf "${YELLOW}Manual follow-up commands written to recon/_manual_commands.txt${NC}\n" >&2
 }
 
 recon() {
@@ -300,6 +380,11 @@ runRecon() {
             printf "${NC}\n"
             printf "${YELLOW}Starting ${currentScan} scan\n"
             printf "${NC}\n"
+
+            if $DRY_RUN; then
+                printf "${YELLOW}[DRY-RUN] Would execute: %s${NC}\n" "${line}" >&2
+                continue
+            fi
 
             local tool_start
             tool_start="$(date +%s)"

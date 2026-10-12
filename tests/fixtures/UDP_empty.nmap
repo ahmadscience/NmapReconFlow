@@ -1,0 +1,6 @@
+# Nmap 7.94SVN scan initiated Mon Jun 15 10:10:00 2026 as: nmap -sU -oN nmap/UDP_testhost.nmap testhost
+Nmap scan report for testhost (10.10.10.10)
+Host is up.
+All 1000 scanned ports on testhost (10.10.10.10) are open|filtered
+
+# Nmap done at Mon Jun 15 10:15:00 2026 -- 1 IP address (1 host up) scanned in 300.05 seconds

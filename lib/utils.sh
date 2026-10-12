@@ -3,21 +3,45 @@
 
 origIFS="${IFS}"
 
+is_valid_scan_type() {
+    case "$1" in
+        [Nn]etwork|[Pp]ort|[Ss]cript|[Ff]ull|UDP|udp|[Vv]ulns|[Rr]econ|[Aa]ll) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+validate_host_safe() {
+    [[ "$1" =~ ^[a-zA-Z0-9._:/-]+$ ]]
+}
+
+# True if the argument is an IPv6 address (at least two colons).
+is_ipv6() {
+    [[ "$1" =~ ^[0-9a-fA-F:]+:[0-9a-fA-F:]*$ ]] && [[ "$1" == *:*:* ]]
+}
+
+# True if the argument is a CIDR range (IPv4 or IPv6).
+is_cidr() {
+    [[ "$1" == */* ]] && [[ "$1" =~ ^[0-9a-fA-F.:]+/[0-9]{1,3}$ ]]
+}
+
+# Expand a CIDR range into individual host IPs, one per line, via nmap -sL.
+expand_cidr() {
+    local spec="$1"
+    ${NMAPPATH:-nmap} -n -sL "${spec}" 2>/dev/null \
+        | awk '/Nmap scan report for/{print $NF}'
+}
+
 # Test whether the host is pingable, return $nmapType and $ttl
 checkPing() {
     local host="$1"
     local pingTest
-    pingTest="$(ping -c 1 -${PING_TIMEOUT_FLAG} 1 "$host" 2>/dev/null | grep ttl)"
+    pingTest="$(ping -c 1 -${PING_TIMEOUT_FLAG} 1 "$host" 2>/dev/null | grep -i ttl)"
     if [ -z "${pingTest}" ]; then
         echo "${NMAPPATH} -Pn"
     else
         echo "${NMAPPATH}"
         local ttl
-        if [[ "$host" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            ttl="$(echo "${pingTest}" | cut -d " " -f 6 | cut -d "=" -f 2)"
-        else
-            ttl="$(echo "${pingTest}" | cut -d " " -f 7 | cut -d "=" -f 2)"
-        fi
+        ttl="$(echo "${pingTest}" | grep -oE '[Tt][Tt][Ll]=[0-9]+' | head -1 | cut -d= -f2)"
         echo "${ttl}"
     fi
 }
@@ -36,20 +60,20 @@ assignPorts() {
     local host="$1"
 
     if [ -f "nmap/Port_${host}.nmap" ]; then
-        commonPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" | sed 's/.$//')"
+        commonPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" | sed 's/,$//')"
     fi
 
     if [ -f "nmap/Full_${host}.nmap" ]; then
         if [ -f "nmap/Port_${host}.nmap" ]; then
-            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" "nmap/Full_${host}.nmap" | sed 's/.$//')"
+            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" "nmap/Full_${host}.nmap" | sed 's/,$//')"
         else
-            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Full_${host}.nmap" | sed 's/.$//')"
+            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Full_${host}.nmap" | sed 's/,$//')"
         fi
     fi
 
     if [ -f "nmap/UDP_${host}.nmap" ]; then
-        udpPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/UDP_${host}.nmap" | sed 's/.$//')"
-        [ "${udpPorts}" = "Al" ] && udpPorts=""
+        udpPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/UDP_${host}.nmap" | sed 's/,$//')"
+        [ -z "${udpPorts}" ] && udpPorts=""
     fi
 }
 
@@ -88,7 +112,7 @@ header() {
     fi
 
     if [[ "${HOST}" =~ ^(([[:alnum:]-]{1,63}\.)*[[:alpha:]]{2,6})$ ]]; then
-        urlIP="$(host -4 -W 1 "${HOST}" "${DNSSERVER}" 2>/dev/null | grep "${HOST}" | head -n 1 | awk '{print $NF}')"
+        urlIP="$(resolve_hostname "${HOST}" "${DNSSERVER}")"
         if [ -n "${urlIP}" ]; then
             printf "${YELLOW} with IP ${NC}${urlIP}\n\n"
         else
@@ -113,6 +137,12 @@ header() {
     kernel="$(uname -s)"
     checkPingResult="$(checkPing "${urlIP:-$HOST}")"
     nmapType="$(echo "${checkPingResult}" | head -n 1)"
+
+    # IPv6 targets need nmap's -6 flag
+    if is_ipv6 "${urlIP:-$HOST}"; then
+        nmapType="${nmapType} -6"
+        printf "${GREEN}IPv6 target detected; enabling nmap -6${NC}\n"
+    fi
 
     if [[ "${nmapType}" == *"-Pn" ]]; then
         pingable=false

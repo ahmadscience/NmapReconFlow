@@ -23,6 +23,14 @@ run_single_target() {
     pingable=true
     RECON_TOOL_STATUS=()
     RECON_TOOL_DURATION=()
+    DNSSERVER=""
+    DNSSTRING=""
+    SCAN_PHASES=()
+    PHASE_STATUS=()
+    PHASE_START=()
+    PHASE_END=()
+    PHASE_NOTE=()
+    detect_dns_server
 
     main
 }
@@ -43,6 +51,10 @@ run_campaign() {
     while IFS= read -r line || [ -n "$line" ]; do
         line="$(echo "$line" | sed 's/#.*//' | awk '{$1=$1};1')"
         [ -z "$line" ] && continue
+        if ! validate_host_safe "$line"; then
+            log_warning "Skipping invalid target: ${line}"
+            continue
+        fi
         targets+=("$line")
     done < "$targets_file" || { log_error "Failed to read ${targets_file}"; exit 1; }
 
@@ -85,20 +97,34 @@ run_campaign() {
     else
         declare -A pid_to_target=()
 
+        # Reap finished jobs with a per-PID wait so each target gets its real
+        # exit code. Portable to bash 4.3 (wait -n -p needs bash 5.1).
+        _campaign_reap() {
+            local pid rc ft
+            for pid in "${!pid_to_target[@]}"; do
+                kill -0 "$pid" 2>/dev/null && continue
+                wait "$pid" 2>/dev/null
+                rc=$?
+                ft="${pid_to_target[$pid]}"
+                campaign_end["$ft"]="$(date +%s)"
+                if [ $rc -eq 0 ]; then
+                    campaign_status["$ft"]="done"
+                else
+                    campaign_status["$ft"]="error"
+                fi
+                unset 'pid_to_target[$pid]'
+                ((completed++))
+                printf "${GREEN}=== Campaign: ${ft} finished (${completed}/${total}) ===${NC}\n"
+            done
+        }
+
         local idx=0
         for target in "${targets[@]}"; do
             ((idx++))
 
-            while [ "$(jobs -rp | wc -l)" -ge "$parallelism" ]; do
-                local finished_pid
-                wait -n -p finished_pid 2>/dev/null || true
-                if [ -n "${finished_pid:-}" ] && [ -n "${pid_to_target[$finished_pid]:-}" ]; then
-                    local ft="${pid_to_target[$finished_pid]}"
-                    campaign_end["$ft"]="$(date +%s)"
-                    campaign_status["$ft"]="done"
-                    unset pid_to_target["$finished_pid"]
-                    ((completed++))
-                fi
+            while [ "${#pid_to_target[@]}" -ge "$parallelism" ]; do
+                _campaign_reap
+                [ "${#pid_to_target[@]}" -ge "$parallelism" ] && sleep 1
             done
 
             printf "${GREEN}=== Campaign: Starting ${target} (${idx}/${total}) ===${NC}\n"
@@ -110,17 +136,9 @@ run_campaign() {
             pid_to_target[$!]="$target"
         done
 
-        for pid in "${!pid_to_target[@]}"; do
-            wait "$pid" 2>/dev/null
-            local rc=$?
-            local ft="${pid_to_target[$pid]}"
-            campaign_end["$ft"]="$(date +%s)"
-            if [ $rc -eq 0 ]; then
-                campaign_status["$ft"]="done"
-            else
-                campaign_status["$ft"]="error"
-            fi
-            ((completed++))
+        while [ "${#pid_to_target[@]}" -gt 0 ]; do
+            _campaign_reap
+            [ "${#pid_to_target[@]}" -gt 0 ] && sleep 1
         done
     fi
 
