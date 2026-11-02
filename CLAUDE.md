@@ -26,6 +26,8 @@ nmapReconFlow.conf.example    # Documented example config
 nmapAutomator.sh              # Legacy script (original upstream)
 tests/run_tests.sh            # Unit tests (TAP)
 tests/e2e.sh                  # End-to-end: real nmap scans of a local web server
+docs/                         # PLATFORMS.md, EXPORTS.md, RESULTS.md (user docs)
+CHANGELOG.md                  # Update with every user-visible change
 ```
 
 ## Coding Conventions

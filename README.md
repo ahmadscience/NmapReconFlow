@@ -113,7 +113,8 @@ platform (`apt`, `brew`, `dnf` or `pacman`).
 
 UDP scans need root. When not root, NmapReconFlow uses `sudo` if it can; in
 autopilot (or with no terminal) it never blocks on a password prompt and skips
-UDP instead (run `sudo -v` first to include it).
+UDP instead (run `sudo -v` first to include it). Details and troubleshooting:
+[docs/PLATFORMS.md](docs/PLATFORMS.md).
 
 ## Installation
 
@@ -247,6 +248,9 @@ Every run writes `exports/` (campaigns also get an aggregated
 | `nmap_merged.xml` | Metasploit `db_import`, `xsltproc`, nmap-parse-output, Faraday, Dradis |
 | `nmap_merged.gnmap` | `brutespray -f`, grep/awk |
 
+Formats and more recipes: [docs/EXPORTS.md](docs/EXPORTS.md). Explore/diff
+details: [docs/RESULTS.md](docs/RESULTS.md).
+
 ### Scan Profiles
 `--profile` sets nmap timing knobs in one flag. Any explicit `NMAP_*` value in
 your config overrides the profile.
@@ -289,9 +293,21 @@ target_ip/
   nmapReconFlow_target_All.txt  # Full console output
 ```
 
+## Documentation
+
+| Doc | Contents |
+|-----|----------|
+| [docs/PLATFORMS.md](docs/PLATFORMS.md) | macOS / Kali / Debian / Ubuntu / Docker setup, UDP & root, troubleshooting |
+| [docs/EXPORTS.md](docs/EXPORTS.md) | every `exports/` file, its format, and recipes for nmap, nuclei, httpx, Metasploit, brutespray, jq |
+| [docs/RESULTS.md](docs/RESULTS.md) | `--explore` views, `--diff` output and exit codes (monitoring), `--export` |
+| [nmapReconFlow.conf.example](nmapReconFlow.conf.example) | every config option with defaults |
+| [CHANGELOG.md](CHANGELOG.md) | what changed in each version |
+| [errors.md](errors.md) / [learnings.md](learnings.md) | bugs found and fixed, and the lessons behind them |
+
 ## Contributing
 
-Pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Pull requests welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for the layout,
+tests (`tests/run_tests.sh`, `tests/e2e.sh`), and cross-platform rules.
 
 ## License
 

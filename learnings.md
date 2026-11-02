@@ -37,3 +37,48 @@ The tool can't be functionally tested without nmap installed. Unit tests should 
 
 ### L010: Progress bar requires a TTY
 The progress dashboard uses ANSI escape sequences that break in piped/redirected output. The `IS_TTY` check handles this but makes automated testing of UI functions difficult.
+
+## Lessons from end-to-end testing (v2.1.0)
+
+### L010: Unit tests passed while whole features were broken
+Campaign mode called a function defined later in the script, and every recon tool
+failed on macOS (`setsid` missing). Neither showed up in unit tests, which never run
+the entry script. `tests/e2e.sh` now runs real nmap scans in CI on all four
+platforms. Keep adding an e2e check for every user-facing flag.
+
+### L011: Function definitions are statements
+In bash a function exists only after its definition has executed. Anything a
+dispatch path calls (`main` for campaigns) must be defined before that path runs.
+
+### L012: Process groups without setsid
+macOS has no `setsid`. `perl -e 'setpgrp(0,0); exec @ARGV'` creates a new process
+group while keeping the controlling terminal. That matters for sudo: tty-bound
+sudo tickets stop working after `setsid` detaches the tty.
+
+### L013: Traps don't survive into subshells
+Caught traps are reset in `( ... )`, pipelines and `&` jobs. `main | tee log` put
+the CHILD_PIDS table in a subshell with no handler. Run main in the parent with
+`main > >(tee log)`, and re-arm traps in every worker. A foreground subshell also
+delays the parent's trap until the child exits; background it and `wait` (the
+`wait` builtin is interruptible). Then give it `<&0` so it keeps the terminal.
+
+### L014: Background helpers hold pipes open
+A killed watchdog subshell left its `sleep N` child running. That sleep inherited
+stdout (the `tee` pipe), so the run log stayed open for N seconds. Kill helper
+children explicitly and detach helpers' stdout.
+
+### L015: nmap units
+`--max-scan-delay 20` means 20 *seconds*, and values ≥ ~100 make nmap quit. The
+original nmapAutomator had this too. Always pass units (`20ms`).
+
+### L016: Substring matching on nmap output
+`grep "389/tcp"` matches `3389/tcp`, and `grep -v "#"` drops `RPC #100000`
+service lines. Anchor patterns on the port column. Extract IDs with `grep -o`
+rather than stripping characters (vulners URLs contain the CVE ID).
+
+### L017: Empty color variables change printf semantics
+When colors are disabled, `printf "${GREEN}----"` becomes `printf "----"`, which
+printf parses as an option. Use `printf --` for formats that may start with `-`.
+
+### L018: `grep -c` already prints 0
+`grep -c x f || echo 0` prints `0` twice, because grep prints 0 *and* exits 1.

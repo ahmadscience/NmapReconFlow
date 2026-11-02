@@ -65,7 +65,8 @@ fi
 check "exports/services.csv has ${PORT}" grep -q ",${PORT},\"tcp\"" "${T}/exports/services.csv"
 check "exports/urls.txt has web URL" grep -qx "http://127.0.0.1:${PORT}" "${T}/exports/urls.txt"
 check "exports/host_port.txt" grep -qx "127.0.0.1:${PORT}" "${T}/exports/host_port.txt"
-check "exports/tcp_ports.txt" grep -qx "${PORT}" "${T}/exports/tcp_ports.txt"
+# (CI runners may have other services on 127.0.0.1: check membership, not equality)
+check "exports/tcp_ports.txt" grep -qE "(^|,)${PORT}(,|\$)" "${T}/exports/tcp_ports.txt"
 check "exports/nmap_merged.xml is well-formed" python3 -I -c "import xml.dom.minidom as m; m.parse('${T}/exports/nmap_merged.xml')"
 check "exports/services.jsonl is valid JSON Lines" python3 -I -c "
 import json
@@ -112,7 +113,8 @@ check "campaign summary lists 127.0.0.1 done" grep -q '| 127.0.0.1 | done |' "${
 check "campaign skipped invalid target" grep -q 'Skipping invalid target: 10.0.0.999' camp.log
 check "campaign honoured exclude file" sh -c "! [ -d '${CS}127.0.0.2' ]"
 check "campaign aggregated exports" grep -q '127.0.0.1' "${CS}exports/hosts.txt"
-check "campaign open_ports counted (no '0\\n0' bug)" grep -q 'open_ports: 1$' "${CS}campaign_summary.md"
+check "campaign open_ports counted" grep -qE 'open_ports: [1-9][0-9]*$' "${CS}campaign_summary.md"
+check "campaign counts are single numbers (no '0\\n0' bug)" sh -c "! grep -qE '^ *[0-9]+$' '${CS}campaign_summary.md'"
 
 # 6. Scope: excluded single target refused
 printf '127.0.0.1\n' > excl2.txt
