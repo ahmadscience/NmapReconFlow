@@ -1,15 +1,29 @@
 #!/usr/bin/env bash
 # NmapReconFlow - UI: colors, progress bar, dashboard
 
-RED='\033[0;31m'
-YELLOW='\033[0;33m'
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-BOLD='\033[1m'
-NC='\033[0m'
-
 IS_TTY=false
 [ -t 1 ] && IS_TTY=true
+
+# ANSI colors only on a terminal. Piped output, cron/CI logs and NO_COLOR
+# (https://no-color.org) get plain text. FORCE_COLOR=1 overrides.
+enable_colors() {
+    RED='\033[0;31m'
+    YELLOW='\033[0;33m'
+    GREEN='\033[0;32m'
+    BLUE='\033[0;34m'
+    BOLD='\033[1m'
+    NC='\033[0m'
+}
+disable_colors() {
+    RED='' YELLOW='' GREEN='' BLUE='' BOLD='' NC=''
+}
+if [ -n "${FORCE_COLOR:-}" ]; then
+    enable_colors
+elif [ -n "${NO_COLOR:-}" ] || ! ${IS_TTY}; then
+    disable_colors
+else
+    enable_colors
+fi
 
 declare -a SCAN_PHASES=()
 declare -A PHASE_STATUS=()
@@ -48,6 +62,10 @@ end_phase() {
     PHASE_END["$phase"]="$(date +%s)"
     if [ "$rc" -eq 124 ]; then
         PHASE_STATUS["$phase"]="timeout"
+    elif [ "$rc" -eq 125 ]; then
+        # Phase chose not to run (e.g. UDP without root/sudo in autopilot)
+        PHASE_STATUS["$phase"]="skipped"
+        [ -z "${PHASE_NOTE[$phase]:-}" ] && PHASE_NOTE["$phase"]="not runnable"
     elif [ "$rc" -ne 0 ]; then
         PHASE_STATUS["$phase"]="error"
     else
@@ -98,7 +116,7 @@ render_dashboard() {
     local done_count=0
     local dashboard=""
 
-    dashboard+="\033[1m=== NmapReconFlow Dashboard === Target: ${HOST} ===\033[0m\n"
+    dashboard+="${BOLD}=== NmapReconFlow Dashboard === Target: ${HOST} ===${NC}\n"
 
     for phase in "${SCAN_PHASES[@]}"; do
         local status="${PHASE_STATUS[$phase]:-pending}"
@@ -131,7 +149,10 @@ render_dashboard() {
     printf "$dashboard" >&2
 }
 
+# Draws to stderr, and only on a terminal: stdout is tee'd into the run log,
+# where a redrawn progress bar would just be thousands of junk lines.
 progressBar() {
+    $IS_TTY || return 0
     [ -z "${2##*[!0-9]*}" ] && return 1
     local cols
     cols="$(stty size 2>/dev/null | cut -d ' ' -f 2)"
@@ -142,9 +163,11 @@ progressBar() {
     local empty=$((width - filled))
     local fill="$(printf "%-${filled}s" "#" | tr ' ' '#')"
     local space="$(printf "%-${empty}s" " ")"
-    printf "In progress: $1 Scan ($3 elapsed - $4 remaining)   \n"
-    printf "[${fill}>${space}] $2%% done   \n"
-    printf "\033[2A"
+    {
+        printf "In progress: $1 Scan ($3 elapsed - $4 remaining)   \n"
+        printf "[${fill}>${space}] $2%% done   \n"
+        printf "\033[2A"
+    } >&2
 }
 
 nmapProgressBar() {
@@ -162,20 +185,35 @@ nmapProgressBar() {
         return 0
     fi
 
+    # A partial result from an interrupted run (no "Nmap done" footer) would
+    # otherwise be waited on until the timeout: discard it and re-scan.
+    if [ -e "${outputFile}" ] && ! grep -q "Nmap done at" "${outputFile}" 2>/dev/null; then
+        rm -f "${outputFile}" "${outputFile%.nmap}.xml" "${outputFile%.nmap}.gnmap"
+    fi
+
+    local nmap_pid=""
     if [ ! -e "${outputFile}" ]; then
-        "$@" --stats-every "${refreshRate}s" >"${tmpOutputFile}" 2>&1 &
-        local nmap_pid=$!
+        # Own process group so timeouts/Ctrl+C kill nmap and its helpers.
+        _spawn_group "$@" --stats-every "${refreshRate}s" >"${tmpOutputFile}" 2>&1
+        nmap_pid="${SPAWNED_PID}"
         CHILD_PIDS["$nmap_pid"]=1
     fi
 
     while { [ ! -e "${outputFile}" ] || ! grep -q "Nmap done at" "${outputFile}" 2>/dev/null; } && \
           { [ ! -e "${tmpOutputFile}" ] || ! grep -i -q "quitting" "${tmpOutputFile}" 2>/dev/null; }; do
 
+        # nmap exited without writing "Nmap done"/"QUITTING" (bad target,
+        # resolution failure, crash): stop waiting instead of spinning until
+        # the timeout.
+        if [ -n "${nmap_pid}" ] && ! kill -0 "$nmap_pid" 2>/dev/null; then
+            break
+        fi
+
         local now_epoch
         now_epoch="$(date +%s)"
         local elapsed_secs=$((now_epoch - start_epoch))
         if [ "$timeout_secs" -gt 0 ] && [ "$elapsed_secs" -ge "$timeout_secs" ]; then
-            if [ -n "${nmap_pid:-}" ] && kill -0 "$nmap_pid" 2>/dev/null; then
+            if [ -n "${nmap_pid}" ] && kill -0 "$nmap_pid" 2>/dev/null; then
                 _kill_tree "$nmap_pid" TERM
                 sleep 2
                 _kill_tree "$nmap_pid" KILL
@@ -193,16 +231,17 @@ nmapProgressBar() {
         progressBar "${scanType:-No}" "${percent:-0}" "${elapsed:-0:00:00}" "${remaining:-0:00:00}"
         sleep "${refreshRate}"
     done
-    printf "\033[0K\r\n\033[0K\r\n"
+    $IS_TTY && printf "\033[0K\r\n\033[0K\r\n" >&2
 
-    if [ -n "${nmap_pid:-}" ]; then
+    if [ -n "${nmap_pid}" ]; then
         wait "$nmap_pid" 2>/dev/null
         nmap_rc=$?
-        unset CHILD_PIDS["$nmap_pid"]
+        unset 'CHILD_PIDS[$nmap_pid]'
     fi
 
     if [ -e "${outputFile}" ]; then
-        awk '/PORT.*STATE.*SERVICE/{found=1} found{if(/^# Nmap/){exit}; print}' "${outputFile}" | awk '!/^SF(:|-)/' | grep -v 'service unrecognized despite'
+        awk '/PORT.*STATE.*SERVICE/{found=1} found{if(/^# Nmap/){exit}; print}' "${outputFile}" \
+            | awk '!/^SF(:|-)/ && !/^Read data files from:/' | grep -v 'service unrecognized despite'
     else
         cat "${tmpOutputFile}"
     fi

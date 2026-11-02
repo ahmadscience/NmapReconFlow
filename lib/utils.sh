@@ -14,6 +14,25 @@ validate_host_safe() {
     [[ "$1" =~ ^[a-zA-Z0-9._:/-]+$ ]]
 }
 
+# True for a dotted-quad IPv4 address with every octet in 0-255.
+is_ipv4() {
+    [[ "$1" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+    local o
+    for o in "${BASH_REMATCH[@]:1}"; do
+        [ $((10#${o})) -le 255 ] || return 1
+    done
+    return 0
+}
+
+# True for a DNS hostname: dot-separated labels of letters/digits/hyphens,
+# max 63 chars each, last label starting with a letter (so "10.0.0.999" is
+# not a hostname). Single labels (localhost, dc01) and long TLDs (.internal,
+# .localdomain) are accepted.
+is_hostname() {
+    [ "${#1}" -le 253 ] || return 1
+    [[ "$1" =~ ^([[:alnum:]]([[:alnum:]-]{0,61}[[:alnum:]])?\.)*[[:alpha:]]([[:alnum:]-]{0,61}[[:alnum:]])?\.?$ ]]
+}
+
 # True if the argument is an IPv6 address (at least two colons).
 is_ipv6() {
     [[ "$1" =~ ^[0-9a-fA-F:]+:[0-9a-fA-F:]*$ ]] && [[ "$1" == *:*:* ]]
@@ -25,23 +44,75 @@ is_cidr() {
 }
 
 # Expand a CIDR range into individual host IPs, one per line, via nmap -sL.
+# Honors EXCLUDE_FILE (nmap --excludefile) when set.
 expand_cidr() {
     local spec="$1"
-    ${NMAPPATH:-nmap} -n -sL "${spec}" 2>/dev/null \
+    local -a excl=()
+    if [ -n "${EXCLUDE_FILE:-}" ] && [ -f "${EXCLUDE_FILE}" ]; then
+        excl=(--excludefile "${EXCLUDE_FILE}")
+    fi
+    ${NMAPPATH:-nmap} -n -sL "${excl[@]}" "${spec}" 2>/dev/null \
         | awk '/Nmap scan report for/{print $NF}'
+}
+
+# IPv4 dotted quad -> integer (caller validates with is_ipv4).
+_ip2int() {
+    local IFS=.
+    local -a o
+    read -r -a o <<< "$1"
+    printf '%d' $(( (10#${o[0]} << 24) + (10#${o[1]} << 16) + (10#${o[2]} << 8) + 10#${o[3]} ))
+}
+
+# True if IPv4 address $1 is inside IPv4 CIDR $2 (e.g. 10.0.0.0/8).
+ip_in_cidr() {
+    local ip="$1" net="${2%/*}" bits="${2#*/}"
+    is_ipv4 "${ip}" && is_ipv4 "${net}" || return 1
+    [[ "${bits}" =~ ^[0-9]+$ ]] && [ "${bits}" -le 32 ] || return 1
+    [ "${bits}" -eq 0 ] && return 0
+    local mask=$(( (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+    [ $(( $(_ip2int "${ip}") & mask )) -eq $(( $(_ip2int "${net}") & mask )) ]
+}
+
+# True if target $1 matches an entry in EXCLUDE_FILE (exact IP/hostname,
+# case-insensitive, or an IPv4 CIDR containing it). '#' comments allowed.
+is_excluded() {
+    local target="$1" entry
+    [ -n "${EXCLUDE_FILE:-}" ] && [ -f "${EXCLUDE_FILE}" ] || return 1
+    while IFS= read -r entry || [ -n "${entry}" ]; do
+        entry="${entry%%#*}"
+        entry="$(printf '%s' "${entry}" | tr -d '[:space:]')"
+        [ -z "${entry}" ] && continue
+        if [ "$(printf '%s' "${entry}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${target}" | tr '[:upper:]' '[:lower:]')" ]; then
+            return 0
+        fi
+        if [[ "${entry}" == */* ]] && ip_in_cidr "${target}" "${entry}"; then
+            return 0
+        fi
+    done < "${EXCLUDE_FILE}"
+    return 1
 }
 
 # Test whether the host is pingable, return $nmapType and $ttl
 checkPing() {
     local host="$1"
     local pingTest
-    pingTest="$(ping -c 1 -${PING_TIMEOUT_FLAG} 1 "$host" 2>/dev/null | grep -i ttl)"
+    local pingCmd="ping"
+    # macOS ping is IPv4-only; IPv6 needs ping6 there.
+    if is_ipv6 "${host}" && ${IS_MACOS:-false} && command -v ping6 >/dev/null 2>&1; then
+        pingCmd="ping6"
+    fi
+    if [ "${pingCmd}" = "ping6" ]; then
+        # BSD ping6 has no per-reply timeout flag; bound it externally.
+        pingTest="$(run_with_timeout 3 ping6 ping6 -c 1 "$host" 2>/dev/null | grep -i -E 'ttl|hlim')"
+    else
+        pingTest="$(ping -c 1 -${PING_TIMEOUT_FLAG} 1 "$host" 2>/dev/null | grep -i ttl)"
+    fi
     if [ -z "${pingTest}" ]; then
         echo "${NMAPPATH} -Pn"
     else
         echo "${NMAPPATH}"
         local ttl
-        ttl="$(echo "${pingTest}" | grep -oE '[Tt][Tt][Ll]=[0-9]+' | head -1 | cut -d= -f2)"
+        ttl="$(echo "${pingTest}" | grep -oE '([Tt][Tt][Ll]|hlim)=[0-9]+' | head -1 | cut -d= -f2)"
         echo "${ttl}"
     fi
 }
@@ -55,25 +126,34 @@ checkOS() {
     esac
 }
 
-# Keep found ports consistent across the script
+# Print the sorted, de-duplicated, comma-joined open port numbers found in
+# the given nmap -oN files (missing files are ignored).
+_ports_from_files() {
+    local -a files=()
+    local f
+    for f in "$@"; do
+        [ -f "$f" ] && files+=("$f")
+    done
+    [ ${#files[@]} -eq 0 ] && return 0
+    awk -F/ '/^[0-9]+\/(tcp|udp)/ && $0 ~ / open/{print $1}' "${files[@]}" \
+        | sort -n -u | paste -sd, -
+}
+
+# Keep found ports consistent across the script. Lists are de-duplicated:
+# nmap warns about (and some NSE scripts misbehave on) repeated ports.
 assignPorts() {
     local host="$1"
 
     if [ -f "nmap/Port_${host}.nmap" ]; then
-        commonPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" | sed 's/,$//')"
+        commonPorts="$(_ports_from_files "nmap/Port_${host}.nmap")"
     fi
 
     if [ -f "nmap/Full_${host}.nmap" ]; then
-        if [ -f "nmap/Port_${host}.nmap" ]; then
-            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Port_${host}.nmap" "nmap/Full_${host}.nmap" | sed 's/,$//')"
-        else
-            allPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/Full_${host}.nmap" | sed 's/,$//')"
-        fi
+        allPorts="$(_ports_from_files "nmap/Port_${host}.nmap" "nmap/Full_${host}.nmap")"
     fi
 
     if [ -f "nmap/UDP_${host}.nmap" ]; then
-        udpPorts="$(awk -vORS=, -F/ '/^[0-9]/{print $1}' "nmap/UDP_${host}.nmap" | sed 's/,$//')"
-        [ -z "${udpPorts}" ] && udpPorts=""
+        udpPorts="$(_ports_from_files "nmap/UDP_${host}.nmap")"
     fi
 }
 
@@ -111,7 +191,7 @@ header() {
         printf "${YELLOW}Running a ${TYPE} scan on ${NC}${HOST}"
     fi
 
-    if [[ "${HOST}" =~ ^(([[:alnum:]-]{1,63}\.)*[[:alpha:]]{2,6})$ ]]; then
+    if ! is_ipv4 "${HOST}" && ! is_ipv6 "${HOST}" && is_hostname "${HOST}"; then
         urlIP="$(resolve_hostname "${HOST}" "${DNSSERVER}")"
         if [ -n "${urlIP}" ]; then
             printf "${YELLOW} with IP ${NC}${urlIP}\n\n"
@@ -130,8 +210,10 @@ header() {
         printf "${GREEN}Autopilot mode enabled. All scans will run unattended.\n"
     fi
 
-    if [[ "${HOST}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        subnet="$(echo "${HOST}" | cut -d "." -f 1,2,3).0"
+    # /24 used by the Network scan and dnsrecon; from the resolved IP when
+    # the target is a hostname.
+    if is_ipv4 "${urlIP:-$HOST}"; then
+        subnet="$(echo "${urlIP:-$HOST}" | cut -d "." -f 1,2,3).0"
     fi
 
     kernel="$(uname -s)"
@@ -165,7 +247,7 @@ header() {
 }
 
 footer() {
-    printf "${GREEN}---------------------Finished all scans------------------------\n"
+    printf -- "${GREEN}---------------------Finished all scans------------------------\n"
     printf "${NC}\n\n"
 
     local elapsedEnd

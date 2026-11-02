@@ -56,6 +56,11 @@ done
 # Source report.sh separately (depends on ui.sh for format_duration)
 source "${SCRIPT_DIR}/lib/report.sh"
 
+# Source recon/export/explore (function defs only; no side effects)
+for _lib in recon export explore; do
+    source "${SCRIPT_DIR}/lib/${_lib}.sh"
+done
+
 # Initialize platform and defaults so tests run against real config
 detect_platform
 set_defaults

@@ -13,20 +13,15 @@ parse_nmap_ports() {
     }' "$file"
 }
 
+# Extract unique CVE IDs from an nmap output file as "CVE-ID|confidence".
+# Matches the ID token itself (vulners lines also carry the ID inside a URL,
+# which must not produce a second, mangled entry).
 parse_vulns_from_file() {
     local file="$1"
     local confidence="$2"
     [ -f "$file" ] || return 0
-    awk -v conf="$confidence" '
-        /CVE-[0-9]+-[0-9]+/ {
-            for(i=1;i<=NF;i++) {
-                if($i ~ /CVE-[0-9]+-[0-9]+/) {
-                    gsub(/[^A-Za-z0-9-]/,"",$i);
-                    print $i"|"conf
-                }
-            }
-        }
-    ' "$file" | sort -u
+    grep -oE 'CVE-[0-9]{4}-[0-9]{4,}' "$file" 2>/dev/null | LC_ALL=C sort -u \
+        | awk -v conf="$confidence" '{print $0 "|" conf}'
 }
 
 json_escape() {
@@ -68,6 +63,7 @@ generate_json_report() {
         printf '  "scan_date": "%s",\n' "$(json_escape "${scan_date}")"
         printf '  "scan_duration_seconds": %d,\n' "${duration}"
         printf '  "scan_type": "%s",\n' "$(json_escape "${TYPE}")"
+        printf '  "scan_profile": "%s",\n' "$(json_escape "${SCAN_PROFILE:-normal}")"
 
         # Ports array
         printf '  "ports": [\n'
@@ -136,27 +132,19 @@ generate_json_report() {
         printf '}\n'
     } > "${json_file}"
 
-    printf "\033[0;32mJSON report saved to: ${OUTPUTDIR}/${json_file}\033[0m\n"
+    printf "${GREEN}JSON report saved to: ${OUTPUTDIR}/${json_file}${NC}\n"
 }
 
-generate_report() {
+# Parse a target's nmap/*.nmap results (run from inside the target's output
+# directory) into two arrays in the CALLER's scope (dynamic scoping; declare
+# them first): all_port_lines ("port|proto|state|service|version|source")
+# and vuln_lines ("CVE-ID|confidence"). Shared by the report, exports,
+# explore and diff so every view agrees.
+collect_scan_data() {
     local host="$1"
-    local report_file="summary.md"
-
-    $GENERATE_REPORT || return 0
-
-    printf "${GREEN}Generating summary report...${NC}\n"
-
-    local scan_date
-    scan_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
-
-    local elapsedEnd
-    elapsedEnd="$(date +%s)"
-    local duration=$((elapsedEnd - elapsedStart))
-
-    # Collect all port data with discovery source
-    declare -A port_source=()
-    declare -a all_port_lines=()
+    local -A port_source=()
+    all_port_lines=()
+    local port proto state service ver cve conf
 
     if [ -f "nmap/Port_${host}.nmap" ]; then
         while IFS='|' read -r port proto state service ver; do
@@ -223,8 +211,27 @@ generate_report() {
         done < <(parse_nmap_ports "nmap/UDP_${host}.nmap")
     fi
 
+    # UDP script/version scan refines UDP service info.
+    if [ -f "nmap/UDP_Extra_${host}.nmap" ]; then
+        while IFS='|' read -r port proto state service ver; do
+            [ -z "$port" ] && continue
+            if [ -z "${port_source[${port}/${proto}]:-}" ]; then
+                port_source["${port}/${proto}"]="udp_scan"
+                all_port_lines+=("${port}|${proto}|${state}|${service}|${ver}|udp_scan")
+            else
+                local idx
+                for idx in "${!all_port_lines[@]}"; do
+                    if [[ "${all_port_lines[$idx]}" == "${port}|${proto}|"* ]]; then
+                        all_port_lines[$idx]="${port}|${proto}|${state}|${service}|${ver}|${port_source[${port}/${proto}]}"
+                        break
+                    fi
+                done
+            fi
+        done < <(parse_nmap_ports "nmap/UDP_Extra_${host}.nmap")
+    fi
+
     # Collect vulnerabilities
-    declare -a vuln_lines=()
+    vuln_lines=()
     if [ -f "nmap/CVEs_${host}.nmap" ]; then
         while IFS='|' read -r cve conf; do
             [ -z "$cve" ] && continue
@@ -243,6 +250,27 @@ generate_report() {
         done < <(parse_vulns_from_file "nmap/Vulns_${host}.nmap" "probable")
     fi
 
+}
+
+generate_report() {
+    local host="$1"
+    local report_file="summary.md"
+
+    $GENERATE_REPORT || return 0
+
+    printf "${GREEN}Generating summary report...${NC}\n"
+
+    local scan_date
+    scan_date="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date '+%Y-%m-%dT%H:%M:%S')"
+
+    local elapsedEnd
+    elapsedEnd="$(date +%s)"
+    local duration=$((elapsedEnd - elapsedStart))
+
+    declare -a all_port_lines=()
+    declare -a vuln_lines=()
+    collect_scan_data "${host}"
+
     # --- Write the report ---
     {
         # YAML front matter
@@ -253,6 +281,7 @@ generate_report() {
         echo "scan_date: \"${scan_date}\""
         echo "scan_duration_seconds: ${duration}"
         echo "scan_type: $(yaml_escape "${TYPE}")"
+        echo "scan_profile: $(yaml_escape "${SCAN_PROFILE:-normal}")"
         echo "ports:"
         for line in "${all_port_lines[@]}"; do
             IFS='|' read -r port proto state service ver source <<< "$line"
@@ -302,6 +331,7 @@ generate_report() {
         echo "**Duration:** $(format_duration ${duration})  "
         echo "**OS Detection:** ${osType:-unknown}  "
         echo "**Scan Type:** ${TYPE}  "
+        echo "**Scan Profile:** ${SCAN_PROFILE:-normal}  "
         echo ""
 
         # Open Ports table
@@ -350,14 +380,16 @@ generate_report() {
         fi
 
         # Recon Findings
-        if [ -d "recon" ] && [ "$(ls -A recon/ 2>/dev/null)" ]; then
+        if [ -d "recon" ] && [ -n "$(ls -A recon/ 2>/dev/null)" ]; then
             echo "## Recon Findings"
             echo ""
             local rfile
-            for rfile in recon/*; do
+            while IFS= read -r rfile; do
                 [ -f "$rfile" ] || continue
                 local rname
-                rname="$(basename "$rfile")"
+                # Path relative to recon/ so per-port files stay unique
+                # (e.g. 80/nikto_host.txt vs 443/nikto_host.txt).
+                rname="${rfile#recon/}"
                 local rstatus="completed"
                 local rdur=""
                 for key in "${!RECON_TOOL_STATUS[@]}"; do
@@ -383,7 +415,7 @@ generate_report() {
                 fi
                 echo '```'
                 echo ""
-            done
+            done < <(find recon -type f 2>/dev/null | LC_ALL=C sort)
         fi
 
         # Scan Phase Summary
@@ -414,39 +446,42 @@ generate_report() {
     fi
 }
 
-# Render an HTML report from nmap XML via xsltproc (nmap ships the stylesheet).
-# Merges all per-scan XML files for the host into one page.
+# Render an HTML report from nmap XML via xsltproc (nmap ships nmap.xsl).
+# Uses all of this target's scans merged into one XML. The stylesheet is
+# passed explicitly when nmap's data dir is found, because the path embedded
+# in the XML points at the scanning machine's install (e.g. Homebrew vs
+# /usr/share) and may not exist where the report is rendered.
 generate_html_report() {
     local host="$1"
     local html_file="summary.html"
 
     if ! command -v xsltproc >/dev/null 2>&1; then
-        log_warning "REPORT_HTML=true but xsltproc not found; skipping HTML report"
+        log_warning "REPORT_HTML=true but xsltproc not found; skipping HTML report ($(install_hint xsltproc))"
         return 0
     fi
 
-    local -a xmls=()
-    local f
-    for f in nmap/*_"${host}".xml; do
-        [ -f "$f" ] && xmls+=("$f")
-    done
-    if [ ${#xmls[@]} -eq 0 ]; then
-        log_warning "No nmap XML files found (set NMAP_XML=true); skipping HTML report"
+    local merged
+    merged="$(mktemp "${TMPDIR:-/tmp}/nmaprf_merged.XXXXXX")"
+    if ! merge_nmap_xml "${host}" > "${merged}" || [ ! -s "${merged}" ]; then
+        rm -f "${merged}"
+        log_warning "No complete nmap XML files found (set NMAP_XML=true); skipping HTML report"
         return 0
     fi
 
-    # Prefer the richest scan XML for the single-file stylesheet render.
-    local primary="${xmls[0]}"
-    for f in "${xmls[@]}"; do
-        case "$f" in
-            nmap/Full_Extra_*) primary="$f" ;;
-            nmap/Script_*) [ "${primary##*/}" != Full_Extra_* ] && primary="$f" ;;
-        esac
-    done
+    local xsl rc
+    if xsl="$(find_nmap_xsl)"; then
+        xsltproc -o "${html_file}" "${xsl}" "${merged}" 2>/dev/null
+        rc=$?
+    else
+        xsltproc -o "${html_file}" "${merged}" 2>/dev/null
+        rc=$?
+    fi
+    rm -f "${merged}"
 
-    if xsltproc "$primary" -o "$html_file" 2>/dev/null; then
+    if [ ${rc} -eq 0 ] && [ -s "${html_file}" ]; then
         printf "${GREEN}HTML report saved to: ${OUTPUTDIR}/${html_file}${NC}\n"
     else
-        log_warning "xsltproc failed to render HTML report"
+        rm -f "${html_file}"
+        log_warning "xsltproc failed to render HTML report (nmap.xsl not found?)"
     fi
 }

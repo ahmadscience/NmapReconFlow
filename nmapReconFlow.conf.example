@@ -19,7 +19,9 @@
 # NMAP_MAX_RATE=500              # Max packets/sec for full scan
 # NMAP_TIMING=4                  # Timing template (0-5)
 # NMAP_MAX_RETRIES=1             # Max retries per probe
-# NMAP_MAX_SCAN_DELAY=20         # Max delay between probes (ms)
+# NMAP_MAX_SCAN_DELAY=20         # Max delay between probes (ms; a bare number is
+#                                #   sent to nmap as "20ms" - nmap itself would
+#                                #   read it as seconds)
 # NMAP_MIN_CVSS=7.0              # Min CVSS score for CVE scan
 
 # ============================================================
@@ -27,6 +29,13 @@
 # ============================================================
 # DEFAULT_SCAN_TYPE=All          # Default scan type
 # AUTOPILOT=false                # Run without prompts
+# EXCLUDE_FILE=                  # File of IPs / IPv4 CIDRs / hostnames never to scan
+#                                #   (same as -x/--exclude)
+# SCAN_PROFILE=normal            # stealth|normal|aggressive - preset timing.
+#                                #   stealth:    -T2, max-rate 100,  retries 2, scan-delay 200
+#                                #   normal:     -T4, max-rate 500,  retries 1, scan-delay 20
+#                                #   aggressive: -T5, max-rate 5000, retries 1, scan-delay 5
+#                                #   Explicit NMAP_* values below override the profile.
 
 # ============================================================
 # Fast Port Discovery (feeds the Full scan)
@@ -67,6 +76,23 @@
 #                                #   enables searchsploit --nmap and HTML reports
 # ENABLE_SEARCHSPLOIT=true       # Suggest searchsploit lookups against nmap XML
 # REPORT_HTML=false              # Also render summary.html from nmap XML (needs xsltproc)
+# RECON_PER_PORT_DIRS=false      # Group per-port recon output under recon/<port>/
+#                                #   (AutoRecon-style) instead of recon/<tool>_<host>_<port>.txt
+# NMAP_GNMAP=true                # Also write grepable nmap output (-oG .gnmap)
+# GENERATE_EXPORTS=true          # Write exports/: services.csv/.jsonl, urls.txt,
+#                                #   host_port.txt, port lists, by_service/,
+#                                #   nmap_merged.xml/.gnmap (see exports/README.txt)
+
+# ============================================================
+# Extra Recon
+# ============================================================
+# ENABLE_WHATWEB=true            # whatweb -a 1 fingerprint per web port
+# ENABLE_SERVICE_NSE=true        # Safe NSE scripts per service (NFS, MySQL, MSSQL,
+#                                #   RDP, Redis, MongoDB, VNC, SMTP, IMAP, POP3, ...)
+# ENABLE_SSH_AUDIT=true          # ssh-audit per SSH port (when installed)
+# RUN_NUCLEI=false               # nuclei against discovered web URLs (active checks)
+# NUCLEI_SEVERITY=low,medium,high,critical
+# RUN_SCREENSHOTS=false          # gowitness screenshots of discovered web URLs
 
 # ============================================================
 # Notifications (completion webhook)

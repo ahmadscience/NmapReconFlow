@@ -55,3 +55,69 @@ DRY_RUN=true
 assert_exit 0 send_notification "dry-run message"
 DRY_RUN=false
 NOTIFY_WEBHOOK=""
+
+# --- set_defaults: scan profile + per-port defaults ---
+assert_eq "normal" "$SCAN_PROFILE" "set_defaults: SCAN_PROFILE defaults to normal"
+assert_eq "false" "$RECON_PER_PORT_DIRS" "set_defaults: RECON_PER_PORT_DIRS defaults to false"
+
+# --- apply_scan_profile: tuning knobs per profile ---
+# Run in subshells (unset knobs first) so the parent shell's config is untouched.
+_profile_knobs() {
+    (
+        unset NMAP_TIMING NMAP_MAX_RATE NMAP_MAX_RETRIES NMAP_MAX_SCAN_DELAY
+        SCAN_PROFILE="$1"
+        apply_scan_profile 2>/dev/null
+        printf '%s:%s:%s:%s' "${NMAP_TIMING}" "${NMAP_MAX_RATE}" "${NMAP_MAX_RETRIES}" "${NMAP_MAX_SCAN_DELAY}"
+    )
+}
+assert_eq "2:100:2:200"  "$(_profile_knobs stealth)"    "apply_scan_profile: stealth tuning"
+assert_eq "4:500:1:20"   "$(_profile_knobs normal)"     "apply_scan_profile: normal tuning"
+assert_eq "5:5000:1:5"   "$(_profile_knobs aggressive)" "apply_scan_profile: aggressive tuning"
+
+# --- apply_scan_profile: explicit knob overrides the profile ---
+assert_eq "7:100:2:200" "$(
+    unset NMAP_MAX_RATE NMAP_MAX_RETRIES NMAP_MAX_SCAN_DELAY
+    NMAP_TIMING=7 SCAN_PROFILE=stealth
+    apply_scan_profile 2>/dev/null
+    printf '%s:%s:%s:%s' "${NMAP_TIMING}" "${NMAP_MAX_RATE}" "${NMAP_MAX_RETRIES}" "${NMAP_MAX_SCAN_DELAY}"
+)" "apply_scan_profile: explicit NMAP_TIMING wins over profile"
+
+# --- apply_scan_profile: name normalization ---
+_profile_name() { ( SCAN_PROFILE="$1"; apply_scan_profile 2>/dev/null; printf '%s' "${SCAN_PROFILE}" ); }
+assert_eq "normal"  "$(_profile_name bogus)"   "apply_scan_profile: unknown profile falls back to normal"
+assert_eq "stealth" "$(_profile_name stealth)" "apply_scan_profile: keeps valid profile name"
+
+# --- nmap_delay_arg: bare numbers are milliseconds (nmap reads bare = seconds) ---
+assert_eq "20ms"  "$(nmap_delay_arg 20)"    "nmap_delay_arg: 20 -> 20ms"
+assert_eq "200ms" "$(nmap_delay_arg 200)"   "nmap_delay_arg: 200 -> 200ms (stealth)"
+assert_eq "1s"    "$(nmap_delay_arg 1s)"    "nmap_delay_arg: unit kept"
+assert_eq "500ms" "$(nmap_delay_arg 500ms)" "nmap_delay_arg: ms kept"
+
+# --- tool_package / install_hint: per package manager ---
+assert_eq "ldap-utils" "$(PKG_MANAGER=apt tool_package ldapsearch)" "tool_package: apt ldapsearch"
+assert_eq "exploitdb" "$(PKG_MANAGER=brew tool_package searchsploit)" "tool_package: brew searchsploit"
+assert_eq "nikto" "$(PKG_MANAGER=apt tool_package nikto)" "tool_package: identity mapping"
+assert_eq "sudo apt install -y nikto dnsutils" "$(PKG_MANAGER=apt install_hint 'nikto dig host')" \
+    "install_hint: apt, de-duplicated packages"
+assert_eq "brew install nikto exploitdb" "$(PKG_MANAGER=brew install_hint 'nikto searchsploit')" "install_hint: brew"
+
+# --- detect_platform: package manager detected on this runner ---
+if [ "$(uname -s)" = "Darwin" ]; then
+    assert_eq "brew" "${PKG_MANAGER}" "detect_platform: macOS uses brew"
+elif grep -qiE '^(ID|ID_LIKE)=.*(debian|ubuntu|kali)' /etc/os-release 2>/dev/null; then
+    assert_eq "apt" "${PKG_MANAGER}" "detect_platform: Debian family uses apt"
+fi
+
+# --- find_nmap_datadir: located when nmap is installed ---
+if command -v nmap >/dev/null 2>&1; then
+    _dd="$(find_nmap_datadir)"
+    assert_eq "true" "$([ -d "${_dd}/scripts" ] && echo true || echo false)" "find_nmap_datadir: has scripts/ (${_dd})"
+fi
+
+# --- resolve_privilege: root needs no sudo prefix ---
+if [ "$(id -u)" = "0" ]; then
+    assert_eq "0:" "$(resolve_privilege; printf '%s:%s' "$?" "${SUDO_PREFIX}")" "resolve_privilege: root -> no sudo"
+fi
+
+# --- colors: disabled when stdout is not a terminal ---
+assert_eq "" "$(disable_colors; printf '%s' "${RED}${NC}")" "disable_colors: empty escapes"

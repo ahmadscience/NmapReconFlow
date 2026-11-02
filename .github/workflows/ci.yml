@@ -1,5 +1,6 @@
 name: CI
 on: [push, pull_request]
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -8,23 +9,69 @@ jobs:
       - name: Syntax check
         run: |
           bash -n nmapReconFlow.sh
-          for f in lib/*.sh; do bash -n "$f"; done
+          for f in lib/*.sh tests/*.sh; do bash -n "$f"; done
           bash -n install.sh
       - name: Install shellcheck
-        run: sudo apt-get install -y shellcheck
-      - name: Shellcheck
-        run: shellcheck -x -e SC2034,SC2154 nmapReconFlow.sh lib/*.sh || true
-  test-linux:
+        run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
+      - name: Shellcheck (errors fail the build)
+        run: shellcheck -x -S error nmapReconFlow.sh lib/*.sh install.sh tests/e2e.sh
+      - name: Shellcheck (warnings, informational)
+        run: shellcheck -x -S warning -e SC2034,SC2154,SC2046 nmapReconFlow.sh lib/*.sh install.sh || true
+
+  # Unit tests + real nmap scans of a local web server on each platform.
+  test-ubuntu:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run tests
+      - name: Install nmap
+        run: sudo apt-get update -qq && sudo apt-get install -y nmap xsltproc
+      - name: Unit tests
         run: bash tests/run_tests.sh
+      - name: End-to-end
+        run: bash tests/e2e.sh
+
+  test-debian:
+    runs-on: ubuntu-latest
+    container: debian:stable-slim
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            bash nmap python3 procps xsltproc perl iputils-ping dnsutils
+      - name: Unit tests
+        run: bash tests/run_tests.sh
+      - name: End-to-end
+        run: bash tests/e2e.sh
+
+  test-kali:
+    runs-on: ubuntu-latest
+    container: kalilinux/kali-rolling
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+            bash nmap python3 procps xsltproc perl iputils-ping dnsutils
+      - name: Dockerfile packages exist on Kali (simulated install)
+        run: |
+          pkgs="$(awk '/apt-get install/{f=1;next} f{l=$0; done=(l ~ /&&/); sub(/&&.*/,"",l); gsub(/\\/,"",l); print l; if (done) exit}' Dockerfile | xargs)"
+          echo "Checking: ${pkgs}"
+          apt-get install -s -qq ${pkgs} >/dev/null
+      - name: Unit tests
+        run: bash tests/run_tests.sh
+      - name: End-to-end
+        run: bash tests/e2e.sh
+
   test-macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install bash 5
-        run: brew install bash
-      - name: Run tests
-        run: /opt/homebrew/bin/bash tests/run_tests.sh || /usr/local/bin/bash tests/run_tests.sh
+      - name: Install bash 5 and nmap
+        run: brew install bash nmap
+      - name: Unit tests
+        run: '"$(brew --prefix)/bin/bash" tests/run_tests.sh'
+      - name: End-to-end
+        run: '"$(brew --prefix)/bin/bash" tests/e2e.sh'

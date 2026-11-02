@@ -2,7 +2,7 @@
 # NmapReconFlow - Configuration, platform detection, and defaults
 # Based on nmapAutomator by @21y4d
 
-NMAPRF_VERSION="2.0.0"
+NMAPRF_VERSION="2.1.0"
 
 detect_platform() {
     PLATFORM="$(uname -s)"
@@ -17,6 +17,97 @@ detect_platform() {
     else
         PING_TIMEOUT_FLAG="t"
     fi
+
+    # Distro + package manager, used for install hints for missing tools.
+    DISTRO_ID="unknown"
+    PKG_MANAGER="unknown"
+    if $IS_MACOS; then
+        DISTRO_ID="macos"
+        PKG_MANAGER="brew"
+    elif [ -r /etc/os-release ]; then
+        local _id _like
+        _id="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID:-unknown}")"
+        _like="$(. /etc/os-release 2>/dev/null; printf '%s' "${ID_LIKE:-}")"
+        DISTRO_ID="${_id}"
+        case " ${_id} ${_like} " in
+            *" debian "*|*" ubuntu "*|*" kali "*|*" parrot "*|*" linuxmint "*|*" pop "*) PKG_MANAGER="apt" ;;
+            *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*) PKG_MANAGER="dnf" ;;
+            *" arch "*|*" manjaro "*) PKG_MANAGER="pacman" ;;
+        esac
+    fi
+}
+
+# Map a recon tool name to the package that provides it on this platform.
+tool_package() {
+    local tool="$1"
+    case "${PKG_MANAGER:-unknown}:${tool}" in
+        apt:ldapsearch)            echo "ldap-utils" ;;
+        apt:snmpwalk)              echo "snmp" ;;
+        apt:snmp-check)            echo "snmpcheck" ;;
+        apt:dig|apt:host)          echo "dnsutils" ;;
+        apt:searchsploit)          echo "exploitdb" ;;
+        apt:showmount)             echo "nfs-common" ;;
+        apt:nxc)                   echo "netexec" ;;
+        apt:xsltproc)              echo "xsltproc" ;;
+        brew:searchsploit)         echo "exploitdb" ;;
+        brew:snmpwalk|brew:snmp-check) echo "net-snmp" ;;
+        brew:xsltproc)             echo "libxslt" ;;
+        brew:smbclient)            echo "samba" ;;
+        dnf:dig|dnf:host)          echo "bind-utils" ;;
+        dnf:ldapsearch)            echo "openldap-clients" ;;
+        dnf:snmpwalk)              echo "net-snmp-utils" ;;
+        dnf:showmount)             echo "nfs-utils" ;;
+        pacman:dig|pacman:host)    echo "bind" ;;
+        pacman:ldapsearch)         echo "openldap" ;;
+        pacman:snmpwalk)           echo "net-snmp" ;;
+        pacman:showmount)          echo "nfs-utils" ;;
+        *)                         echo "${tool}" ;;
+    esac
+}
+
+# Print the install command for a space-separated list of tools.
+install_hint() {
+    local pkgs="" t p
+    for t in $1; do
+        p="$(tool_package "${t}")"
+        case " ${pkgs} " in *" ${p} "*) ;; *) pkgs="${pkgs:+${pkgs} }${p}" ;; esac
+    done
+    case "${PKG_MANAGER:-unknown}" in
+        apt)    echo "sudo apt install -y ${pkgs}" ;;
+        brew)   echo "brew install ${pkgs}" ;;
+        dnf)    echo "sudo dnf install -y ${pkgs}" ;;
+        pacman) echo "sudo pacman -S ${pkgs}" ;;
+        *)      echo "install with your package manager: ${pkgs}" ;;
+    esac
+}
+
+# Decide how to run privileged nmap scans (UDP). Sets SUDO_PREFIX to "" when
+# already root, "sudo" when sudo is usable. Returns 1 when neither works
+# (e.g. autopilot/no TTY and sudo would need a password) so the caller can
+# skip instead of hanging on a password prompt.
+resolve_privilege() {
+    SUDO_PREFIX=""
+    if [ "$(id -u 2>/dev/null)" = "0" ]; then
+        return 0
+    fi
+    if ! command -v sudo >/dev/null 2>&1; then
+        return 1
+    fi
+    # "sudo -n": the scan itself runs in a background process group and must
+    # never sit on a password prompt; the ticket is primed in the foreground.
+    if sudo -n true 2>/dev/null; then
+        SUDO_PREFIX="sudo -n"
+        return 0
+    fi
+    if ${AUTOPILOT:-false} || [ ! -t 0 ]; then
+        return 1
+    fi
+    echo "UDP needs root; asking for your sudo password..." >&2
+    if sudo -v; then
+        SUDO_PREFIX="sudo -n"
+        return 0
+    fi
+    return 1
 }
 
 sed_inplace() {
@@ -59,18 +150,52 @@ find_wordlist() {
     return 1
 }
 
-find_nmap_scripts_dir() {
-    local datadir
-    datadir="$(${NMAPPATH:-nmap} --datadir 2>/dev/null | head -1)"
-    if [ -n "$datadir" ] && [ -d "${datadir}/scripts" ]; then
-        printf '%s' "${datadir}/scripts"
-        return 0
+# Resolve symlinks without GNU readlink -f / realpath (absent on older macOS).
+_resolve_path() {
+    local p="$1" link i=0
+    while [ -L "${p}" ] && [ $i -lt 20 ]; do
+        link="$(readlink "${p}")"
+        case "${link}" in
+            /*) p="${link}" ;;
+            *)  p="$(dirname "${p}")/${link}" ;;
+        esac
+        i=$((i + 1))
+    done
+    printf '%s/%s' "$(cd "$(dirname "${p}")" 2>/dev/null && pwd -P)" "$(basename "${p}")"
+}
+
+# Locate nmap's data directory (scripts/, nmap.xsl). Checks $NMAPDIR, the
+# installed binary's ../share/nmap (Homebrew Intel/ARM, /usr, /usr/local,
+# static builds), then well-known locations.
+find_nmap_datadir() {
+    local d bin
+    local -a dirs=()
+    [ -n "${NMAPDIR:-}" ] && dirs+=("${NMAPDIR}")
+    bin="${NMAPPATH:-$(command -v nmap 2>/dev/null)}"
+    bin="${bin%% *}"
+    if [ -n "${bin}" ] && [ -e "${bin}" ]; then
+        bin="$(_resolve_path "${bin}")"
+        dirs+=("$(dirname "$(dirname "${bin}")")/share/nmap")
     fi
-    local dirs=(/usr/share/nmap/scripts /usr/local/share/nmap/scripts /opt/homebrew/share/nmap/scripts)
+    dirs+=(/usr/share/nmap /usr/local/share/nmap /opt/homebrew/share/nmap /opt/local/share/nmap)
     for d in "${dirs[@]}"; do
-        [ -d "$d" ] && printf '%s' "$d" && return 0
+        [ -d "${d}/scripts" ] && printf '%s' "${d}" && return 0
     done
     return 1
+}
+
+find_nmap_scripts_dir() {
+    local datadir
+    datadir="$(find_nmap_datadir)" || return 1
+    printf '%s' "${datadir}/scripts"
+}
+
+# Path to nmap.xsl (for HTML reports), if nmap ships it here.
+find_nmap_xsl() {
+    local datadir
+    datadir="$(find_nmap_datadir)" || return 1
+    [ -f "${datadir}/nmap.xsl" ] || return 1
+    printf '%s' "${datadir}/nmap.xsl"
 }
 
 set_defaults() {
@@ -91,6 +216,10 @@ set_defaults() {
     : "${DEFAULT_SCAN_TYPE:=All}"
     : "${AUTOPILOT:=false}"
     : "${CAMPAIGN_PARALLEL:=1}"
+
+    # Scan timing profile: stealth|normal|aggressive. Tunes the nmap knobs
+    # below (timing, rate, retries, scan-delay). See apply_scan_profile().
+    : "${SCAN_PROFILE:=normal}"
 
     : "${WORDLIST_BASE_DIR:=}"
     : "${WORDLIST_DIRB:=dirb/common.txt}"
@@ -120,8 +249,37 @@ set_defaults() {
     # Suggest searchsploit lookups on detected service versions
     : "${ENABLE_SEARCHSPLOIT:=true}"
 
+    # Group per-port recon output under recon/<port>/ (AutoRecon-style) instead
+    # of the flat recon/<tool>_<host>_<port>.txt layout. Off = backward compat.
+    : "${RECON_PER_PORT_DIRS:=false}"
+
     # HTML report generated from the nmap XML (requires NMAP_XML + xsltproc)
     : "${REPORT_HTML:=false}"
+
+    # Grepable nmap output (-oG .gnmap) alongside -oN/-oX, like nmap -oA.
+    # Consumed by brutespray, nmap-parse-output, grep/awk one-liners.
+    : "${NMAP_GNMAP:=true}"
+
+    # Write exports/ (CSV, host:port, URLs, port lists, merged XML) after
+    # each scan, for feeding other tools.
+    : "${GENERATE_EXPORTS:=true}"
+
+    # Scope exclusions: file of IPs/CIDRs/hostnames never to scan.
+    : "${EXCLUDE_FILE:=}"
+
+    # Web fingerprinting with whatweb (-a 1, one request per URL).
+    : "${ENABLE_WHATWEB:=true}"
+    # Targeted, non-intrusive NSE scripts per detected service (NFS, MySQL,
+    # MSSQL, RDP, Redis, MongoDB, VNC, SMTP, IMAP/POP3, memcached...).
+    : "${ENABLE_SERVICE_NSE:=true}"
+    # ssh-audit against SSH services (only when installed).
+    : "${ENABLE_SSH_AUDIT:=true}"
+
+    # nuclei template scan against discovered web URLs (opt-in: active checks).
+    : "${RUN_NUCLEI:=false}"
+    : "${NUCLEI_SEVERITY:=low,medium,high,critical}"
+    # Web screenshots with gowitness (opt-in).
+    : "${RUN_SCREENSHOTS:=false}"
 
     # Completion notification webhook (Slack/Discord/generic). Empty = disabled.
     : "${NOTIFY_WEBHOOK:=}"
@@ -140,11 +298,63 @@ set_defaults() {
 # Honors NMAP_XML. Echoes flags to be word-split into an nmap arg list.
 nmap_output_flags() {
     local base="$1"
-    if [ "${NMAP_XML}" = "true" ]; then
-        printf -- '-oN %s.nmap -oX %s.xml' "${base}" "${base}"
+    printf -- '-oN %s.nmap' "${base}"
+    [ "${NMAP_XML}" = "true" ] && printf -- ' -oX %s.xml' "${base}"
+    [ "${NMAP_GNMAP:-true}" = "true" ] && printf -- ' -oG %s.gnmap' "${base}"
+    return 0
+}
+
+# nmap reads a bare --max-scan-delay number as SECONDS (and refuses values
+# >= ~100 as a likely mistake). Our knob is documented in milliseconds, so
+# append "ms" to plain numbers; values with a unit (500ms, 1s) pass through.
+nmap_delay_arg() {
+    local v="${1:-${NMAP_MAX_SCAN_DELAY}}"
+    if [[ "${v}" =~ ^[0-9]+$ ]]; then
+        printf '%sms' "${v}"
     else
-        printf -- '-oN %s.nmap' "${base}"
+        printf '%s' "${v}"
     fi
+}
+
+# Apply the SCAN_PROFILE preset to the nmap tuning knobs. Uses := so an
+# explicit config/CLI/env value always wins over the profile; the profile
+# only fills knobs the user has not set. Unknown names fall back to normal.
+# Called from load_config BEFORE set_defaults so profile values take effect
+# before the built-in defaults would otherwise fill them.
+apply_scan_profile() {
+    local profile="${SCAN_PROFILE:-normal}"
+    case "${profile}" in
+        stealth|normal|aggressive) ;;
+        *)
+            printf "${YELLOW:-}Unknown scan profile '%s'; falling back to 'normal'.${NC:-}\n" "${profile}" >&2
+            profile="normal"
+            ;;
+    esac
+    SCAN_PROFILE="${profile}"
+
+    case "${profile}" in
+        stealth)
+            # Slow and quiet: minimise footprint and lockout/IDS risk.
+            : "${NMAP_TIMING:=2}"
+            : "${NMAP_MAX_RATE:=100}"
+            : "${NMAP_MAX_RETRIES:=2}"
+            : "${NMAP_MAX_SCAN_DELAY:=200}"
+            ;;
+        aggressive)
+            # Fast and loud: for labs/CTFs where speed beats stealth.
+            : "${NMAP_TIMING:=5}"
+            : "${NMAP_MAX_RATE:=5000}"
+            : "${NMAP_MAX_RETRIES:=1}"
+            : "${NMAP_MAX_SCAN_DELAY:=5}"
+            ;;
+        normal)
+            # Balanced defaults (same as the built-in defaults).
+            : "${NMAP_TIMING:=4}"
+            : "${NMAP_MAX_RATE:=500}"
+            : "${NMAP_MAX_RETRIES:=1}"
+            : "${NMAP_MAX_SCAN_DELAY:=20}"
+            ;;
+    esac
 }
 
 load_config() {
@@ -160,21 +370,24 @@ load_config() {
         config_file="${HOME}/.nmapReconFlow.conf"
     fi
 
-    set_defaults
-
+    # Source the config file first (if any) so SCAN_PROFILE and any explicit
+    # tuning overrides are known, then let the profile fill unset knobs, then
+    # fill everything still unset with built-in defaults. An invalid config is
+    # skipped but defaults are still applied.
     if [ -n "$config_file" ]; then
         if grep -qvE '^([[:space:]]*#|[[:space:]]*$|[A-Z_][A-Z_0-9]*=)' "$config_file" 2>/dev/null; then
             printf "${RED:-}Warning: Config file contains invalid lines. Skipping.${NC:-}\n" >&2
-            return 1
-        fi
-        if grep -qE '\$\(|`' "$config_file" 2>/dev/null; then
+        elif grep -qE '\$\(|`' "$config_file" 2>/dev/null; then
             printf "${RED:-}Warning: Config file contains command substitutions. Skipping.${NC:-}\n" >&2
-            return 1
+        else
+            # shellcheck disable=SC1090
+            source "$config_file"
+            printf "${GREEN:-}Loaded config: ${config_file}${NC:-}\n"
         fi
-        # shellcheck disable=SC1090
-        source "$config_file"
-        printf "${GREEN:-}Loaded config: ${config_file}${NC:-}\n"
     fi
+
+    apply_scan_profile
+    set_defaults
 }
 
 resolve_hostname() {

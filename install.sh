@@ -39,13 +39,18 @@ Usage: install.sh [OPTIONS]
 
 Options:
   --prefix <DIR>    Install directory (default: /usr/local/share/nmapReconFlow)
-  --with-deps       Install system dependencies (nmap, curl, etc.)
+  --with-deps       Install core dependencies (nmap, bash 4.3+, curl, DNS tools,
+                    ping, xsltproc)
+  --with-recon      Also install optional recon tools (ffuf, gobuster, nikto,
+                    whatweb, sslscan, ...). Best effort: tools your distro does
+                    not package are reported and skipped.
   -h, --help        Show this help message
 
 Examples:
   sudo ./install.sh
   sudo ./install.sh --with-deps
   sudo ./install.sh --prefix /opt/nmapReconFlow
+  sudo ./install.sh --with-deps --with-recon
 EOF
 }
 
@@ -71,14 +76,15 @@ detect_platform() {
                 # shellcheck disable=SC1091
                 . /etc/os-release
                 DISTRO="${ID:-unknown}"
-                case "${ID:-}" in
-                    debian|ubuntu|kali|linuxmint|pop)
+                # ID_LIKE covers derivatives (Parrot, Mint, Pop!_OS, ...).
+                case " ${ID:-} ${ID_LIKE:-} " in
+                    *" debian "*|*" ubuntu "*|*" kali "*|*" parrot "*|*" linuxmint "*|*" pop "*)
                         DISTRO_FAMILY="debian"
                         ;;
-                    fedora|rhel|centos|rocky|alma)
+                    *" fedora "*|*" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*|*" alma "*)
                         DISTRO_FAMILY="rhel"
                         ;;
-                    arch|manjaro)
+                    *" arch "*|*" manjaro "*)
                         DISTRO_FAMILY="arch"
                         ;;
                     *)
@@ -100,16 +106,30 @@ detect_platform() {
 
 # ── Bash version check ──────────────────────────────────────────────────────
 
+# The installer itself runs on any bash (incl. macOS 3.2); the TOOL needs
+# 4.3+. On macOS the tool re-execs itself with Homebrew bash when present.
 check_bash_version() {
-    if [ -z "${BASH_VERSINFO[0]:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 4 ] || \
-       { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
-        error "NmapReconFlow requires bash 4.3+. Current: ${BASH_VERSION:-unknown}"
-        if [ "${PLATFORM}" = "macos" ]; then
-            warn "macOS ships with bash 3.x. Install newer bash with: brew install bash"
+    local withDeps="$1"
+    local b ok=false
+    for b in bash /opt/homebrew/bin/bash /usr/local/bin/bash; do
+        command -v "$b" >/dev/null 2>&1 || continue
+        if "$b" -c '[ "${BASH_VERSINFO[0]}" -gt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -ge 3 ]; }' 2>/dev/null; then
+            ok=true
+            info "Found bash 4.3+: $("$b" -c 'echo "${BASH_VERSION}"') ($(command -v "$b"))"
+            break
         fi
-        exit 1
+    done
+    if ! ${ok}; then
+        if [ "${withDeps}" = true ]; then
+            warn "No bash 4.3+ found yet; --with-deps will install it"
+        else
+            error "NmapReconFlow requires bash 4.3+ (found ${BASH_VERSION:-unknown})"
+            if [ "${PLATFORM}" = "macos" ]; then
+                warn "macOS ships bash 3.2. Run: brew install bash   (or re-run with --with-deps)"
+            fi
+            exit 1
+        fi
     fi
-    info "Bash version ${BASH_VERSION} meets requirement (4.3+)"
 }
 
 # ── Root/sudo check ─────────────────────────────────────────────────────────
@@ -145,19 +165,21 @@ install_deps() {
     case "${DISTRO_FAMILY}" in
         debian)
             apt-get update -qq
-            apt-get install -y nmap curl dnsutils
+            DEBIAN_FRONTEND=noninteractive apt-get install -y \
+                bash nmap curl dnsutils iputils-ping xsltproc perl
             ;;
         macos)
             if ! command -v brew >/dev/null 2>&1; then
                 die "Homebrew is required to install dependencies on macOS. Visit https://brew.sh"
             fi
-            brew install nmap bash
+            # Homebrew refuses to run as root; use the invoking user under sudo.
+            brew_install nmap bash
             ;;
         rhel)
-            dnf install -y nmap curl bind-utils
+            dnf install -y bash nmap curl bind-utils iputils libxslt perl
             ;;
         arch)
-            pacman -Sy --noconfirm nmap curl bind-tools
+            pacman -Sy --noconfirm bash nmap curl bind iputils libxslt perl
             ;;
         *)
             warn "Unknown distro family '${DISTRO_FAMILY}' — cannot auto-install dependencies"
@@ -167,6 +189,57 @@ install_deps() {
     esac
 
     info "Dependencies installed successfully"
+}
+
+# Run brew as the real user when invoked through sudo (brew refuses root).
+brew_install() {
+    if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ]; then
+        sudo -u "${SUDO_USER}" brew install "$@"
+    else
+        brew install "$@"
+    fi
+}
+
+# Optional recon tools, installed one by one so a package your distro lacks
+# does not abort the rest.
+install_recon_tools() {
+    local -a pkgs=()
+    case "${DISTRO_FAMILY}" in
+        debian)
+            pkgs=(ffuf gobuster nikto whatweb sslscan smbclient smbmap ldap-utils snmp
+                  dnsrecon nfs-common hydra ssh-audit enum4linux-ng exploitdb nuclei
+                  gowitness wordlists seclists)
+            ;;
+        macos)
+            pkgs=(ffuf gobuster nikto sslscan hydra nuclei ssh-audit exploitdb)
+            ;;
+        rhel)
+            pkgs=(nikto sslscan samba-client openldap-clients net-snmp-utils nfs-utils hydra)
+            ;;
+        arch)
+            pkgs=(nikto sslscan smbclient openldap net-snmp nfs-utils hydra)
+            ;;
+        *)
+            warn "Unknown distro family; skipping optional recon tools"
+            return 0
+            ;;
+    esac
+
+    info "Installing optional recon tools (best effort)..."
+    local p
+    local -a failed=()
+    for p in "${pkgs[@]}"; do
+        case "${DISTRO_FAMILY}" in
+            debian) DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "$p" >/dev/null 2>&1 || failed+=("$p") ;;
+            macos)  brew_install "$p" >/dev/null 2>&1 || failed+=("$p") ;;
+            rhel)   dnf install -y -q "$p" >/dev/null 2>&1 || failed+=("$p") ;;
+            arch)   pacman -S --noconfirm --needed "$p" >/dev/null 2>&1 || failed+=("$p") ;;
+        esac
+    done
+    if [ ${#failed[@]} -gt 0 ]; then
+        warn "Not available from your package manager (install manually if needed): ${failed[*]}"
+    fi
+    info "Optional recon tools step finished"
 }
 
 # ── Install project files ───────────────────────────────────────────────────
@@ -204,7 +277,7 @@ install_files() {
     # Create symlink (idempotent — remove old one if it exists)
     local symlinkDir
     symlinkDir="$(dirname "${SYMLINK_PATH}")"
-    if [ -d "${symlinkDir}" ] && [ -w "${symlinkDir}" -o "$(id -u)" -eq 0 ]; then
+    if [ -d "${symlinkDir}" ] && { [ -w "${symlinkDir}" ] || [ "$(id -u)" -eq 0 ]; }; then
         if [ -L "${SYMLINK_PATH}" ] || [ -e "${SYMLINK_PATH}" ]; then
             rm -f "${SYMLINK_PATH}"
         fi
@@ -221,6 +294,7 @@ install_files() {
 main() {
     local installDir="${DEFAULT_INSTALL_DIR}"
     local withDeps=false
+    local withRecon=false
 
     # Parse arguments
     while [ $# -gt 0 ]; do
@@ -234,6 +308,10 @@ main() {
                 ;;
             --with-deps)
                 withDeps=true
+                shift
+                ;;
+            --with-recon)
+                withRecon=true
                 shift
                 ;;
             -h|--help)
@@ -250,11 +328,14 @@ main() {
     echo "────────────────────────────────────"
 
     detect_platform
-    check_bash_version
+    check_bash_version "${withDeps}"
     check_privileges "${installDir}"
 
     if [ "${withDeps}" = true ]; then
         install_deps
+    fi
+    if [ "${withRecon}" = true ]; then
+        install_recon_tools
     fi
 
     install_files "${installDir}"
