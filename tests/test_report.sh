@@ -43,3 +43,10 @@ assert_eq "$_json_tab_expected" "$(json_escape "$_json_tab")" "json_escape: tabs
 _json_nl=$'line1\nline2'
 _json_nl_expected="line1\\nline2"
 assert_eq "$_json_nl_expected" "$(json_escape "$_json_nl")" "json_escape: newlines"
+
+# --- parse_vulns_from_file: IDs only, no URL-mangled duplicates ---
+_vf="$(mktemp)"
+printf '| vulners:\n|   cpe:/a:openbsd:openssh:7.2:\n|       CVE-2016-6210  7.8  https://vulners.com/cve/CVE-2016-6210\n|       CVE-2016-10009 7.5  https://vulners.com/cve/CVE-2016-10009\n' > "${_vf}"
+assert_eq $'CVE-2016-10009|confirmed\nCVE-2016-6210|confirmed' "$(parse_vulns_from_file "${_vf}" confirmed)" \
+    "parse_vulns_from_file: unique CVE IDs, URLs not double-counted"
+rm -f "${_vf}"
