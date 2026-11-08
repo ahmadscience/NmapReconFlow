@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Tests / CI
+- e2e now covers a real UDP scan (in the root Debian/Kali CI containers), a real recon tool (nikto, installed in the Kali job) against the local web server, and the `--explore` no-view summary fallback on a non-terminal.
+- The interactive `--explore` menu is unit-tested by driving `_explore_menu` with piped choices (numbered and word aliases, unknown choice, EOF).
+- New `docker-build` CI job: builds the `Dockerfile` and smoke-tests the entrypoint (`--version`, `--help`) and that nmap/nikto/ffuf are present in the image.
+
 ## 2.1.0
 
 ### Fixed

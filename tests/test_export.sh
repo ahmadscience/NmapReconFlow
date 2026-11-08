@@ -144,4 +144,18 @@ assert_eq "true" "$([ -f "${_exp_root}/new/10.0.0.1/exports/services.csv" ] && [
     "export_results_dir: per-target and campaign exports"
 assert_exit 1 export_results_dir "${_exp_root}/missing"
 
+# --- _explore_menu: numbered choices drive the matching view, q quits ---
+# The CLI opens the menu only on a TTY, so test the function directly with
+# piped choices. 3 = ports, 5 = urls, then quit.
+_menu_out="$(printf '3\n5\nq\n' | _explore_menu "${_exp_root}/old" 2>&1)"
+assert_match '22/tcp|22 +tcp' "${_menu_out}" "explore menu: choice 3 shows the ports table"
+assert_match 'http://10\.0\.0\.1:80' "${_menu_out}" "explore menu: choice 5 shows URLs"
+# Word aliases work too, and an unknown choice is reported, not fatal.
+_menu_out2="$(printf 'services\nbogus\nquit\n' | _explore_menu "${_exp_root}/old" 2>&1)"
+assert_match 'ssh/tcp' "${_menu_out2}" "explore menu: word alias 'services'"
+assert_match 'Unknown choice: bogus' "${_menu_out2}" "explore menu: unknown choice reported"
+# EOF on input (read fails) exits the loop cleanly.
+_explore_menu "${_exp_root}/old" </dev/null >/dev/null 2>&1
+assert_eq "0" "$?" "explore menu: EOF on input exits cleanly"
+
 rm -rf "${_exp_root}"

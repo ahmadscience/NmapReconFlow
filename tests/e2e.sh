@@ -130,6 +130,36 @@ sleep 3
 check "TERM leaves no orphaned nmap" sh -c "! ps -A -o args | grep -v grep | grep -q 'nmap.*sigtest\\|nmap.*Full_127.0.0.1'"
 check "stealth profile accepted by nmap (scan-delay in ms)" sh -c "! grep -q 'QUITTING' sig.log"
 
+# 8. UDP scan. Needs root; the Debian and Kali CI containers run as root,
+#    Ubuntu and macOS runners do not. Localhost UDP is fast.
+if [ "$(id -u)" = "0" ]; then
+    "${NRF}" -H 127.0.0.1 -t UDP -a --no-exports -o udp > udp.log 2>&1
+    rc=$?
+    check "UDP run exits 0 (rc=${rc})" [ "${rc}" -eq 0 ]
+    check "UDP phase ran as root (not skipped)" grep -qx 'UDP=done' udp/.nmapReconFlow.state
+    check "UDP scan wrote nmap output" [ -s "udp/nmap/UDP_127.0.0.1.nmap" ]
+    check "UDP not reported as needing root" sh -c "! grep -q 'needs root' udp.log"
+else
+    echo "# (not root; skipping UDP scan check - run in the Debian/Kali CI job)"
+fi
+
+# 9. A real recon tool against the local web server, when one is installed
+#    (the Kali CI job installs nikto). Section 2b uses a stub; this exercises
+#    the real tee/timeout path and a real tool's output file.
+if command -v nikto >/dev/null 2>&1; then
+    "${NRF}" -H 127.0.0.1 -t Recon -a --no-exports -o realrecon > realrecon.log 2>&1
+    check "real recon run exits 0" [ $? -eq 0 ]
+    check "real nikto wrote non-empty output" [ -s "realrecon/recon/nikto_127.0.0.1_${PORT}.txt" ]
+    check "real recon tool recorded in report" grep -q 'tool: nikto' realrecon/summary.md
+else
+    echo "# (no real recon tool installed; skipping real-recon check)"
+fi
+
+# 10. --explore with no view on a non-terminal prints the summary and exits
+#     (the menu itself opens only on a TTY; it is unit-tested in test_export.sh).
+printf '' | "${NRF}" --explore "${T}" > explore_default.out 2>/dev/null
+check "--explore with no view prints summary on non-tty" grep -q '127.0.0.1' explore_default.out
+
 echo
 printf '# e2e: %d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then
