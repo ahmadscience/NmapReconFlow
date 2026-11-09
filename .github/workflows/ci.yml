@@ -54,7 +54,8 @@ jobs:
         run: |
           apt-get update -qq
           DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
-            bash nmap python3 procps xsltproc perl iputils-ping dnsutils
+            bash nmap python3 procps xsltproc perl iputils-ping dnsutils \
+            nikto
       - name: Dockerfile packages exist on Kali (simulated install)
         run: |
           pkgs="$(awk '/apt-get install/{f=1;next} f{l=$0; done=(l ~ /&&/); sub(/&&.*/,"",l); gsub(/\\/,"",l); print l; if (done) exit}' Dockerfile | xargs)"
@@ -64,6 +65,22 @@ jobs:
         run: bash tests/run_tests.sh
       - name: End-to-end
         run: bash tests/e2e.sh
+
+  # Build the Docker image and smoke-test the entrypoint from it.
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t nmapreconflow:ci .
+      - name: Entrypoint runs from the image
+        run: |
+          docker run --rm nmapreconflow:ci --version | grep -q 'NmapReconFlow v'
+          docker run --rm nmapreconflow:ci --help | grep -q 'Usage:'
+      - name: nmap and a recon tool are present in the image
+        run: |
+          docker run --rm --entrypoint sh nmapreconflow:ci -c \
+            'command -v nmap && command -v nikto && command -v ffuf'
 
   test-macos:
     runs-on: macos-latest
