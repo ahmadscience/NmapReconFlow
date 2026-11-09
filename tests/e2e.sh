@@ -125,6 +125,9 @@ _t0="$(date +%s)"
 (sleep 4; echo nikto) | PATH="${WORK}/stubbin:${PATH}" "${NRF}" -H 127.0.0.1 -t Recon --no-exports -o interactive > interactive.log 2>&1
 _t1="$(date +%s)"
 check "interactive recon ran chosen tool" grep -q 'stub-nikto' "interactive/recon/nikto_127.0.0.1_${PORT}.txt"
+# (On the macOS runner the plain run takes ~2 min: nmap there can't
+# fingerprint the Python test server, so -sV tries all ~30 probes with 5s
+# timeouts. Real servers are identified in seconds on macOS too.)
 # Relative to the identical non-interactive run above on this machine: the
 # regression this guards (an orphaned watchdog sleep holding the run log open)
 # adds the full recon timeout (~600s); the prompt and a stub tool add ~10s.

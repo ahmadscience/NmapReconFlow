@@ -12,6 +12,7 @@
 - New `docker-build` CI job: builds the `Dockerfile` and smoke-tests the entrypoint (`--version`, `--help`) and that nmap/nikto/ffuf are present in the image.
 - e2e checks that the signal and UDP tests leave unrelated processes alive (a web server the tool doesn't own must still answer), and the real-nikto check runs against its own fresh server.
 - Process-group tests: the pgid check waits for perl's `setpgrp` to take effect (slower on macOS), and a new check confirms a group kill also stops the spawned command's children.
+- Investigated why the script/version scan takes ~2 min on the macOS CI runner vs ~8 s on Linux: nmap there receives the Python test server's replies but can't fingerprint them, so version detection tries all ~30 probes with 5 s timeouts. DNS, NSE scripts and nmap's event engine were ruled out; a real web server (scanme.nmap.org) is identified in ~7 s on macOS, as on Linux. Not a tool bug, so no code change; documented in the troubleshooting tables.
 - macOS now runs the full e2e suite in CI for the first time (44/44). The interactive-run time limit is relative to the plain run on the same machine, and the log prints per-phase timings.
 
 ## 2.1.0

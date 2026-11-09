@@ -99,4 +99,5 @@ default capabilities include `NET_RAW`, which nmap's SYN/UDP scans need.
 | `Exclude file not found` | `-x` needs an existing file (one IP/CIDR/hostname per line, `#` comments) |
 | HTML report skipped | install `xsltproc` (`apt install xsltproc`; built into macOS) |
 | `ndiff` Python `TypeError` | upstream ndiff bug; use `--diff` |
+| One port takes ~2 minutes in the Script scan | nmap couldn't identify that service, so version detection tries all ~30 probes (5 s timeout each). Normal on every OS; recognised services take seconds. (In CI this shows up on macOS because nmap there doesn't recognise the Python test server; real servers such as Apache are identified in ~7 s on macOS, same as Linux.) |
 | Want to resume after Ctrl+C | re-run the same command with `--resume`. Partial scans are redone, finished ones skipped |

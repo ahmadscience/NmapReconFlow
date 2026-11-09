@@ -211,6 +211,7 @@ nmapReconFlow -H 10.10.10.5 -t All --dry-run
 | `Host is likely running ...` looks wrong | It's a guess from network behaviour; the script scan's result is more reliable |
 | No open ports found | The target may be off, or blocking scans: try `-t Full`, check the IP, check your VPN |
 | The scan seems stuck | Each step has a time limit and moves on by itself. Ctrl+C stops it, and `--resume` continues later |
+| The Script/Standard scan takes ~2 minutes on one port | Normal: nmap couldn't recognise the software there, so it tries all ~30 of its identification probes and waits a few seconds for each. Recognised services take seconds |
 
 More detail: [PLATFORMS.md](PLATFORMS.md) (setup and troubleshooting per
 system), [RESULTS.md](RESULTS.md) (explore and diff),
