@@ -11,7 +11,10 @@
 
 CI (`.github/workflows/ci.yml`) runs the unit tests and `tests/e2e.sh` (real
 nmap scans of a local web server, a campaign, explore/export/diff, signal
-handling) on Ubuntu, Debian, Kali and macOS for every push.
+handling) on Ubuntu, Debian, Kali and macOS for every push. Debian and Kali run
+as root, so they also cover UDP scans; Kali also runs a real nikto scan. A
+`docker-build` job builds the Docker image and checks that it starts and
+contains nmap, nikto and ffuf.
 
 ## Requirements
 

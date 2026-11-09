@@ -34,8 +34,12 @@ shellcheck -x -S error nmapReconFlow.sh lib/*.sh install.sh tests/e2e.sh
 On macOS run them with Homebrew bash: `"$(brew --prefix)/bin/bash" tests/run_tests.sh`.
 
 CI (`.github/workflows/ci.yml`) runs lint, then unit + e2e tests on Ubuntu,
-Debian (container), Kali (container) and macOS. The Kali job also checks that
-every package in the `Dockerfile` exists.
+Debian (container), Kali (container) and macOS, plus a `docker-build` job that
+builds the image and smoke-tests it. Some e2e sections only run where they can:
+the UDP scan needs root (Debian/Kali containers), and the real-nikto check needs
+nikto (installed in the Kali job); elsewhere they print a skip note. The Kali job
+also checks that every package in the `Dockerfile` exists. The e2e log prints
+per-phase timings (`# timing:` lines) for diagnosing slow platforms.
 
 Add a unit test for every new function, and an e2e check for every new flag.
 Unit tests run under `set -u`, so initialise any global a function reads.
@@ -83,3 +87,4 @@ Unit tests run under `set -u`, so initialise any global a function reads.
 ## Commits and PRs
 
 Keep changes focused, describe what you verified, and update `CHANGELOG.md`.
+Do not add a "Generated with Claude Code" line to PR descriptions or commits.

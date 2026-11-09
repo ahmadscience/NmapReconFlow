@@ -6,6 +6,9 @@
 - e2e now covers a real UDP scan (in the root Debian/Kali CI containers), a real recon tool (nikto, installed in the Kali job) against the local web server, and the `--explore` no-view summary fallback on a non-terminal.
 - The interactive `--explore` menu is unit-tested by driving `_explore_menu` with piped choices (numbered and word aliases, unknown choice, EOF).
 - New `docker-build` CI job: builds the `Dockerfile` and smoke-tests the entrypoint (`--version`, `--help`) and that nmap/nikto/ffuf are present in the image.
+- e2e checks that the signal and UDP tests leave unrelated processes alive (a web server the tool doesn't own must still answer), and the real-nikto check runs against its own fresh server.
+- Process-group tests: the pgid check waits for perl's `setpgrp` to take effect (slower on macOS), and a new check confirms a group kill also stops the spawned command's children.
+- macOS now runs the full e2e suite in CI for the first time (44/44). The interactive-run time limit is relative to the plain run on the same machine, and the log prints per-phase timings.
 
 ## 2.1.0
 

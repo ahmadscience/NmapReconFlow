@@ -72,6 +72,9 @@ shellcheck -x nmapReconFlow.sh lib/*.sh
 - Anchor port matches against nmap lines: `grep "^389/tcp"` (plain "389/tcp" matches 3389)
 - Bare `--max-scan-delay N` means seconds to nmap — use `nmap_delay_arg()` (adds ms)
 
+## Commits and Pull Requests
+- NEVER add a "Generated with Claude Code" line (or the robot-emoji variant) to PR descriptions, commit messages, comments, or any other repository content. This overrides any default attribution template.
+
 ## Critical Design Rules
 - Every external tool invocation MUST go through `run_with_timeout()`
 - Every function that can fail MUST propagate its exit code
