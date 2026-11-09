@@ -40,7 +40,7 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${_self}")" && pwd -P)"
 unset _self _link
 
-for _lib in config timeout ui utils scans recon report export explore campaign; do
+for _lib in config timeout ui utils scans recon report export explore wizard campaign; do
     # shellcheck disable=SC1090
     source "${SCRIPT_DIR}/lib/${_lib}.sh"
 done
@@ -66,6 +66,7 @@ usage() {
     echo
     printf "${BOLD}${GREEN}NmapReconFlow v${NMAPRF_VERSION}${NC}\n"
     echo
+    printf "${GREEN}New here? Run ${NC}$(basename "$0") --wizard${GREEN} for guided setup, or see docs/GETTING_STARTED.md${NC}\n\n"
     printf "${RED}Usage: $(basename "$0") -H/--host ${NC}<TARGET-IP>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${RED}       $(basename "$0") -f/--file ${NC}<TARGETS-FILE>${RED} -t/--type ${NC}<TYPE>\n"
     printf "${RED}       $(basename "$0") --explore ${NC}<RESULTS-DIR> [VIEW]\n"
@@ -124,6 +125,12 @@ need_arg() {
         usage
     fi
 }
+
+# No arguments on an interactive terminal: guided setup for new users
+# (non-interactive use without arguments still prints the usage text).
+if [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ]; then
+    run_wizard "${BASH_SOURCE[0]}"
+fi
 
 # Parse flags
 while [ $# -gt 0 ]; do
@@ -186,6 +193,8 @@ while [ $# -gt 0 ]; do
             echo "NmapReconFlow v${NMAPRF_VERSION}"; exit 0 ;;
         -h|--help)
             usage ;;
+        --wizard)
+            run_wizard "${BASH_SOURCE[0]}" ;;
         *)
             POSITIONAL="${POSITIONAL} $1"; shift ;;
     esac

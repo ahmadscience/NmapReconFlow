@@ -11,7 +11,10 @@
 
 CI (`.github/workflows/ci.yml`) runs the unit tests and `tests/e2e.sh` (real
 nmap scans of a local web server, a campaign, explore/export/diff, signal
-handling) on Ubuntu, Debian, Kali and macOS for every push.
+handling) on Ubuntu, Debian, Kali and macOS for every push. Debian and Kali run
+as root, so they also cover UDP scans; Kali also runs a real nikto scan. A
+`docker-build` job builds the Docker image and checks that it starts and
+contains nmap, nikto and ffuf.
 
 ## Requirements
 
@@ -96,4 +99,5 @@ default capabilities include `NET_RAW`, which nmap's SYN/UDP scans need.
 | `Exclude file not found` | `-x` needs an existing file (one IP/CIDR/hostname per line, `#` comments) |
 | HTML report skipped | install `xsltproc` (`apt install xsltproc`; built into macOS) |
 | `ndiff` Python `TypeError` | upstream ndiff bug; use `--diff` |
+| One port takes ~2 minutes in the Script scan | nmap couldn't identify that service, so version detection tries all ~30 probes (5 s timeout each). Normal on every OS; recognised services take seconds. (In CI this shows up on macOS because nmap there doesn't recognise the Python test server; real servers such as Apache are identified in ~7 s on macOS, same as Linux.) |
 | Want to resume after Ctrl+C | re-run the same command with `--resume`. Partial scans are redone, finished ones skipped |

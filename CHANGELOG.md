@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+### Added
+- **Guided setup for beginners**: run `nmapReconFlow` with no options on a terminal (or `--wizard`) and answer seven plain questions (target, scan type, speed, unattended, HTML report, folder, permission). It refuses to scan unless you confirm permission, re-asks invalid input, and prints the equivalent command before running it.
+- **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**: a step-by-step guide for new users (install per OS, first safe scan, reading results, choosing a scan type, copy-paste recipes, troubleshooting, glossary). Linked from the top of the README and from `--help`.
+
 ### Tests / CI
 - e2e now covers a real UDP scan (in the root Debian/Kali CI containers), a real recon tool (nikto, installed in the Kali job) against the local web server, and the `--explore` no-view summary fallback on a non-terminal.
 - The interactive `--explore` menu is unit-tested by driving `_explore_menu` with piped choices (numbered and word aliases, unknown choice, EOF).
 - New `docker-build` CI job: builds the `Dockerfile` and smoke-tests the entrypoint (`--version`, `--help`) and that nmap/nikto/ffuf are present in the image.
+- e2e checks that the signal and UDP tests leave unrelated processes alive (a web server the tool doesn't own must still answer), and the real-nikto check runs against its own fresh server.
+- Process-group tests: the pgid check waits for perl's `setpgrp` to take effect (slower on macOS), and a new check confirms a group kill also stops the spawned command's children.
+- Investigated why the script/version scan takes ~2 min on the macOS CI runner vs ~8 s on Linux: nmap there receives the Python test server's replies but can't fingerprint them, so version detection tries all ~30 probes with 5 s timeouts. DNS, NSE scripts and nmap's event engine were ruled out; a real web server (scanme.nmap.org) is identified in ~7 s on macOS, as on Linux. Not a tool bug, so no code change; documented in the troubleshooting tables.
+- macOS now runs the full e2e suite in CI for the first time (44/44). The interactive-run time limit is relative to the plain run on the same machine, and the log prints per-phase timings.
 
 ## 2.1.0
 

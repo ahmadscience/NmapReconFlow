@@ -57,7 +57,7 @@ done
 source "${SCRIPT_DIR}/lib/report.sh"
 
 # Source recon/export/explore (function defs only; no side effects)
-for _lib in recon export explore; do
+for _lib in recon export explore wizard; do
     source "${SCRIPT_DIR}/lib/${_lib}.sh"
 done
 

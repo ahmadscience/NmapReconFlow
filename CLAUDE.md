@@ -21,12 +21,13 @@ lib/
   report.sh                   # summary.md generation (YAML + markdown), collect_scan_data()
   export.sh                   # exports/ (CSV, JSONL, URLs, merged nmap XML/gnmap)
   explore.sh                  # --explore views and --diff of result directories
+  wizard.sh                   # --wizard guided setup (also: no args on a terminal)
   campaign.sh                 # Multi-target campaign orchestration
 nmapReconFlow.conf.example    # Documented example config
 nmapAutomator.sh              # Legacy script (original upstream)
 tests/run_tests.sh            # Unit tests (TAP)
 tests/e2e.sh                  # End-to-end: real nmap scans of a local web server
-docs/                         # PLATFORMS.md, EXPORTS.md, RESULTS.md (user docs)
+docs/                         # GETTING_STARTED.md (beginners), PLATFORMS.md, EXPORTS.md, RESULTS.md
 CHANGELOG.md                  # Update with every user-visible change
 ```
 
@@ -71,6 +72,9 @@ shellcheck -x nmapReconFlow.sh lib/*.sh
 - `printf` formats must not start with `-` once colors are empty: use `printf -- "..."`
 - Anchor port matches against nmap lines: `grep "^389/tcp"` (plain "389/tcp" matches 3389)
 - Bare `--max-scan-delay N` means seconds to nmap — use `nmap_delay_arg()` (adds ms)
+
+## Commits and Pull Requests
+- NEVER add a "Generated with Claude Code" line (or the robot-emoji variant) to PR descriptions, commit messages, comments, or any other repository content. This overrides any default attribution template.
 
 ## Critical Design Rules
 - Every external tool invocation MUST go through `run_with_timeout()`

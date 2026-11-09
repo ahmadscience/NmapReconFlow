@@ -4,6 +4,10 @@ Automated reconnaissance workflow. Fire and forget.
 
 *Based on [nmapAutomator](https://github.com/21y4d/nmapAutomator) by @21y4d*
 
+> **New to this?** Start with the **[Getting Started guide](docs/GETTING_STARTED.md)**:
+> install, run your first scan with the guided setup (just run `nmapReconFlow`
+> with no options), and read the results. No prior experience needed.
+
 ## What's New
 
 NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
@@ -28,6 +32,7 @@ NmapReconFlow is a major overhaul of nmapAutomator with these improvements:
 - **Opt-in brute force** — `--brute` auto-runs hydra against ssh/ftp/rdp (off by default; lockout risk).
 - **Scan profiles** — `--profile stealth|normal|aggressive` presets nmap timing, rate, retries, and scan-delay in one flag.
 - **Per-port output dirs** — `--per-port-dirs` groups recon output under `recon/<port>/` (AutoRecon-style) instead of a flat folder.
+- **Guided setup** — run with no options (or `--wizard`) to answer a few plain questions instead of learning flags; it shows the equivalent command so you learn as you go.
 - **Docker & installer** — `Dockerfile` (Kali + tools) and `install.sh` (`--with-deps`, `--with-recon`).
 - **Exports for other tools** — every run writes `exports/`: `services.csv`/`.jsonl`, `urls.txt`, `host_port.txt`, port lists, per-service target lists, and one merged nmap XML/gnmap (Metasploit `db_import`, nuclei, httpx, brutespray, spreadsheets).
 - **Explore results** — `--explore <dir>` browses a target or campaign (interactive menu, or views like `ports http`, `urls`, `vulns`, `search <regex>`).
@@ -177,6 +182,7 @@ Optional:
   --profile <NAME>          Timing profile: stealth, normal, aggressive (default: normal)
   --per-port-dirs           Group recon output under recon/<port>/ (AutoRecon-style)
   --no-color                Plain output (also NO_COLOR=1; automatic when piped)
+  --wizard                  Guided setup: answer a few questions (also: run with no options)
   -v, --version             Print version
 
 Results tools (no scanning, no nmap needed):
@@ -297,6 +303,7 @@ target_ip/
 
 | Doc | Contents |
 |-----|----------|
+| [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) | **Beginners start here**: install, first scan, reading results, recipes, glossary |
 | [docs/PLATFORMS.md](docs/PLATFORMS.md) | macOS / Kali / Debian / Ubuntu / Docker setup, UDP & root, troubleshooting |
 | [docs/EXPORTS.md](docs/EXPORTS.md) | every `exports/` file, its format, and recipes for nmap, nuclei, httpx, Metasploit, brutespray, jq |
 | [docs/RESULTS.md](docs/RESULTS.md) | `--explore` views, `--diff` output and exit codes (monitoring), `--export` |
