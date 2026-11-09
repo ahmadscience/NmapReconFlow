@@ -29,31 +29,19 @@ jobs:
             DNS="$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
           fi
           echo "DNS=${DNS}" | tee -a "$GITHUB_ENV"
-      - name: "A: exact tool command (-sCV + --dns-server)"
-        run: time nmap -sCV -p8000 --open 127.0.0.1 --dns-server="$DNS" -oN /dev/null | tail -3
-      - name: "B: -sCV without --dns-server"
-        run: time nmap -sCV -p8000 --open 127.0.0.1 -oN /dev/null | tail -3
-      - name: "C: -sCV with -n (no DNS at all)"
-        run: time nmap -n -sCV -p8000 --open 127.0.0.1 -oN /dev/null | tail -3
-      - name: "D: -sV only"
-        run: time nmap -sV -p8000 127.0.0.1 -oN /dev/null | tail -3
-      - name: "E: -sC only"
-        run: time nmap -sC -p8000 127.0.0.1 -oN /dev/null | tail -3
-      - name: "F: per-script trace (-sC -d), seconds since start"
+      - name: "Engines available"
+        run: nmap -V | grep -i nsock || true
+      - name: "H: -sV, nsock engine poll"
+        run: time nmap --nsock-engine poll -sV -p8000 127.0.0.1 -oN /dev/null | tail -3
+      - name: "I: -sV, nsock engine select"
+        run: time nmap --nsock-engine select -sV -p8000 127.0.0.1 -oN /dev/null | tail -3
+      - name: "J: -sV, default engine, with 15s limit + replies shown around GetRequest"
         run: |
-          start=$(date +%s)
-          nmap -sC -p8000 -d 127.0.0.1 2>&1 | while IFS= read -r l; do
-            case "$l" in
-              *"NSE: Starting"*|*"NSE: Finished"*|*"NSE: Script scanning"*|*"NSE: Script Post"*|*"Completed NSE"*|*"Initiating NSE"*)
-                printf '%4ss %s\n' "$(( $(date +%s) - start ))" "$l" ;;
-            esac
-          done
-      - name: "G: per-probe trace of -sV (version-trace), seconds since start"
-        run: |
-          start=$(date +%s)
-          nmap -sV -p8000 --version-trace 127.0.0.1 2>&1 | while IFS= read -r l; do
-            case "$l" in
-              *"Service scan"*|*"probe"*|*"Probe"*|*"timed out"*|*"Completed Service"*)
-                printf '%4ss %s\n' "$(( $(date +%s) - start ))" "$l" ;;
-            esac
-          done | head -80
+          nmap -sV -p8000 --version-trace --host-timeout 20s 127.0.0.1 2>&1 \
+            | grep -n -i -E -A4 'probe GetRequest|GetRequest.*(recv|read|match)|Received|bytes' | head -40 || true
+      - name: "K: -sV against a real remote web server (scanme.nmap.org:80, allowed by Nmap)"
+        run: time nmap -sV -p80 scanme.nmap.org -oN /dev/null | tail -4
+      - name: "L: -sCV, poll engine (the tool's scan shape)"
+        run: time nmap --nsock-engine poll -sCV -p8000 --open 127.0.0.1 -oN /dev/null | tail -3
+      - name: "M: curl sanity check of the test server"
+        run: time curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/
