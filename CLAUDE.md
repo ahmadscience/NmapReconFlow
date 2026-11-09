@@ -21,12 +21,13 @@ lib/
   report.sh                   # summary.md generation (YAML + markdown), collect_scan_data()
   export.sh                   # exports/ (CSV, JSONL, URLs, merged nmap XML/gnmap)
   explore.sh                  # --explore views and --diff of result directories
+  wizard.sh                   # --wizard guided setup (also: no args on a terminal)
   campaign.sh                 # Multi-target campaign orchestration
 nmapReconFlow.conf.example    # Documented example config
 nmapAutomator.sh              # Legacy script (original upstream)
 tests/run_tests.sh            # Unit tests (TAP)
 tests/e2e.sh                  # End-to-end: real nmap scans of a local web server
-docs/                         # PLATFORMS.md, EXPORTS.md, RESULTS.md (user docs)
+docs/                         # GETTING_STARTED.md (beginners), PLATFORMS.md, EXPORTS.md, RESULTS.md
 CHANGELOG.md                  # Update with every user-visible change
 ```
 

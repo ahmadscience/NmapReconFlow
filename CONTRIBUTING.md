@@ -17,6 +17,7 @@ lib/recon.sh            Recon recommendations + execution
 lib/report.sh           collect_scan_data(), summary.md / summary.json / summary.html
 lib/export.sh           exports/ (CSV, JSONL, URLs, host:port, merged XML/gnmap)
 lib/explore.sh          --explore views and --diff
+lib/wizard.sh           --wizard guided setup (also runs with no args on a terminal)
 lib/campaign.sh         Multi-target campaigns
 tests/run_tests.sh      Unit tests (TAP), sources tests/test_*.sh
 tests/e2e.sh            End-to-end: real nmap scans of a local web server

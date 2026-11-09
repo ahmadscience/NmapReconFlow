@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+- **Guided setup for beginners**: run `nmapReconFlow` with no options on a terminal (or `--wizard`) and answer seven plain questions (target, scan type, speed, unattended, HTML report, folder, permission). It refuses to scan unless you confirm permission, re-asks invalid input, and prints the equivalent command before running it.
+- **[docs/GETTING_STARTED.md](docs/GETTING_STARTED.md)**: a step-by-step guide for new users (install per OS, first safe scan, reading results, choosing a scan type, copy-paste recipes, troubleshooting, glossary). Linked from the top of the README and from `--help`.
+
 ### Tests / CI
 - e2e now covers a real UDP scan (in the root Debian/Kali CI containers), a real recon tool (nikto, installed in the Kali job) against the local web server, and the `--explore` no-view summary fallback on a non-terminal.
 - The interactive `--explore` menu is unit-tested by driving `_explore_menu` with piped choices (numbered and word aliases, unknown choice, EOF).

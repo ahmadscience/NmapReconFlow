@@ -68,6 +68,22 @@ check "invalid IPv4 octet rejected" sh -c "! '${NRF}' -H 10.0.0.999 -t Port >/de
 check "missing flag value rejected" sh -c "! '${NRF}' -H >/dev/null 2>&1"
 check "no ANSI escapes when piped" sh -c "! '${NRF}' --help 2>&1 | grep -q \"\$(printf '\\033')\""
 
+# 1b. Guided setup (--wizard): answers piped in. Declining permission must
+#     scan nothing; a bad target is re-asked; input ending early aborts.
+#     The HTML question is only asked when xsltproc exists.
+W_HTML=""; command -v xsltproc >/dev/null 2>&1 && W_HTML='n\n'
+printf "127.0.0.1\n1\n\n\n${W_HTML}wiz_no\nn\n" | "${NRF}" --wizard > wiz_no.log 2>&1
+check "wizard: declining permission exits non-zero" [ $? -ne 0 ]
+check "wizard: declining permission scans nothing" [ ! -d wiz_no ]
+printf '127.0.0.1\n' | "${NRF}" --wizard > wiz_eof.log 2>&1
+check "wizard: input ending early aborts cleanly" [ $? -ne 0 ]
+printf "bad target!!\n127.0.0.1\n1\n\n\n${W_HTML}wiz\ny\n" | "${NRF}" --wizard > wiz.log 2>&1
+check "wizard: full run exits 0" [ $? -eq 0 ]
+check "wizard: re-asks an invalid target" grep -q "doesn't look like" wiz.log
+check "wizard: shows the equivalent command" grep -q 'Running: nmapReconFlow.sh -H 127.0.0.1 -t Port -a -o wiz' wiz.log
+check "wizard: scan ran with the chosen settings" grep -q "^${PORT}/tcp" wiz/nmap/Port_127.0.0.1.nmap
+check "no arguments without a terminal prints usage" sh -c "'${NRF}' </dev/null 2>&1 | grep -q 'Usage:'"
+
 # 2. Single target: Port + Script + Recon, all report/export formats
 _s0="$(date +%s)"
 "${NRF}" -H 127.0.0.1 -t Recon -a --format both --html -o single > single.log 2>&1
