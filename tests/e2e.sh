@@ -18,8 +18,27 @@ ok()   { pass=$((pass + 1)); printf 'ok   - %s\n' "$1"; }
 bad()  { fail=$((fail + 1)); printf 'FAIL - %s\n' "$1"; }
 check() { local msg="$1"; shift; if "$@"; then ok "${msg}"; else bad "${msg}"; fi; }
 
+# True if an HTTP server on 127.0.0.1:$1 answers within 5s (proxies bypassed).
+http_alive() {
+    python3 -I -c "
+import sys, urllib.request
+o = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+o.open('http://127.0.0.1:%s/' % sys.argv[1], timeout=5).read()" "$1" >/dev/null 2>&1
+}
+
+# Wait up to ~10s for a TCP listener on 127.0.0.1:$1.
+wait_port() {
+    local _
+    for _ in $(seq 1 50); do
+        (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && return 0
+        sleep 0.2
+    done
+    return 1
+}
+
 cleanup() {
     [ -n "${SRV_PID:-}" ] && kill "${SRV_PID}" 2>/dev/null
+    [ -n "${SRV2_PID:-}" ] && kill "${SRV2_PID}" 2>/dev/null
     rm -rf "${WORK}"
 }
 trap cleanup EXIT
@@ -50,8 +69,13 @@ check "missing flag value rejected" sh -c "! '${NRF}' -H >/dev/null 2>&1"
 check "no ANSI escapes when piped" sh -c "! '${NRF}' --help 2>&1 | grep -q \"\$(printf '\\033')\""
 
 # 2. Single target: Port + Script + Recon, all report/export formats
+_s0="$(date +%s)"
 "${NRF}" -H 127.0.0.1 -t Recon -a --format both --html -o single > single.log 2>&1
 rc=$?
+SINGLE_SECS=$(( $(date +%s) - _s0 ))
+# Per-phase timing, for diagnosing slow platforms from the CI log.
+awk '/^phases:/{p=1;next} p&&/^---/{exit} p&&/name:/{n=$3} p&&/duration_seconds:/{printf "# timing: %s phase %ss\n", n, $2}' single/summary.md 2>/dev/null
+echo "# timing: whole Recon run ${SINGLE_SECS}s"
 check "single-target Recon run exits 0 (rc=${rc})" [ "${rc}" -eq 0 ]
 T="single"
 check "Port scan found ${PORT}" grep -q "^${PORT}/tcp" "${T}/nmap/Port_127.0.0.1.nmap"
@@ -85,7 +109,11 @@ _t0="$(date +%s)"
 (sleep 4; echo nikto) | PATH="${WORK}/stubbin:${PATH}" "${NRF}" -H 127.0.0.1 -t Recon --no-exports -o interactive > interactive.log 2>&1
 _t1="$(date +%s)"
 check "interactive recon ran chosen tool" grep -q 'stub-nikto' "interactive/recon/nikto_127.0.0.1_${PORT}.txt"
-check "interactive run finished promptly ($((_t1 - _t0))s)" [ $((_t1 - _t0)) -lt 120 ]
+# Relative to the identical non-interactive run above on this machine: the
+# regression this guards (an orphaned watchdog sleep holding the run log open)
+# adds the full recon timeout (~600s); the prompt and a stub tool add ~10s.
+check "interactive run finished promptly ($((_t1 - _t0))s vs ${SINGLE_SECS}s plain)" \
+    [ $((_t1 - _t0)) -lt $((SINGLE_SECS + 90)) ]
 check "recon tool status in report" grep -q 'tool: nikto' interactive/summary.md
 
 # 3. Resume: completed phases are skipped
@@ -143,13 +171,26 @@ else
     echo "# (not root; skipping UDP scan check - run in the Debian/Kali CI job)"
 fi
 
-# 9. A real recon tool against the local web server, when one is installed
-#    (the Kali CI job installs nikto). Section 2b uses a stub; this exercises
-#    the real tee/timeout path and a real tool's output file.
+# 8b. The signal (7) and UDP (8) tests must not disturb processes the tool
+#     does not own: the web server started at the top must still answer.
+check "unrelated web server still alive after signal/UDP tests" http_alive "${PORT}"
+
+# 9. A real recon tool, when one is installed (the Kali CI job installs
+#    nikto). Section 2b uses a stub; this exercises the real tee/timeout path
+#    and a real tool's output file. It gets its own fresh web server on
+#    another top-1000 port, and the shared one is stopped first, so this
+#    measures nikto and nothing else (a heavy nikto run in section 2 has
+#    already hit the shared server with thousands of requests).
+PORT2=8080
 if command -v nikto >/dev/null 2>&1; then
+    kill "${SRV_PID}" 2>/dev/null; wait "${SRV_PID}" 2>/dev/null; SRV_PID=""
+    (cd www && exec python3 -m http.server "${PORT2}" --bind 127.0.0.1 >/dev/null 2>&1) &
+    SRV2_PID=$!
+    check "dedicated web server for real recon is up" wait_port "${PORT2}"
     "${NRF}" -H 127.0.0.1 -t Recon -a --no-exports -o realrecon > realrecon.log 2>&1
     check "real recon run exits 0" [ $? -eq 0 ]
-    check "real nikto wrote non-empty output" [ -s "realrecon/recon/nikto_127.0.0.1_${PORT}.txt" ]
+    check "real recon found port ${PORT2} open" grep -q "^${PORT2}/tcp *open" realrecon/nmap/Port_127.0.0.1.nmap
+    check "real nikto wrote non-empty output" [ -s "realrecon/recon/nikto_127.0.0.1_${PORT2}.txt" ]
     check "real recon tool recorded in report" grep -q 'tool: nikto' realrecon/summary.md
 else
     echo "# (no real recon tool installed; skipping real-recon check)"
@@ -163,8 +204,10 @@ check "--explore with no view prints summary on non-tty" grep -q '127.0.0.1' exp
 echo
 printf '# e2e: %d passed, %d failed\n' "${pass}" "${fail}"
 if [ "${fail}" -gt 0 ]; then
-    echo "# --- single.log ---"; tail -n 40 single.log
-    echo "# --- camp.log ---"; tail -n 40 camp.log
+    for _log in single.log camp.log sig.log udp.log realrecon.log; do
+        [ -f "${_log}" ] || continue
+        echo "# --- ${_log} ---"; tail -n 40 "${_log}"
+    done
     exit 1
 fi
 exit 0
