@@ -1,0 +1,59 @@
+name: macOS script-scan diagnostics (temporary)
+on:
+  push:
+    branches: [claude/cool-lamport-qEe1M]
+    paths: ['.github/workflows/macos-diag.yml']
+
+# One-off: find why `nmap -sCV` takes ~122s on macOS vs ~8s on Linux.
+# Each step removes one factor; the per-script trace names the slow script.
+jobs:
+  diag:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install nmap
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then brew install nmap; else sudo apt-get update -qq && sudo apt-get install -y -qq nmap; fi
+          nmap --version | head -1
+      - name: Start web server and show resolver
+        run: |
+          mkdir www && echo hi > www/index.html
+          (cd www && nohup python3 -m http.server 8000 --bind 127.0.0.1 >/dev/null 2>&1 &)
+          sleep 2
+          if [ "$RUNNER_OS" = macOS ]; then
+            DNS="$(scutil --dns | awk '/nameserver\[0\]/{print $3; exit}')"
+          else
+            DNS="$(awk '/^nameserver/{print $2; exit}' /etc/resolv.conf)"
+          fi
+          echo "DNS=${DNS}" | tee -a "$GITHUB_ENV"
+      - name: "A: exact tool command (-sCV + --dns-server)"
+        run: time nmap -sCV -p8000 --open 127.0.0.1 --dns-server="$DNS" -oN /dev/null | tail -3
+      - name: "B: -sCV without --dns-server"
+        run: time nmap -sCV -p8000 --open 127.0.0.1 -oN /dev/null | tail -3
+      - name: "C: -sCV with -n (no DNS at all)"
+        run: time nmap -n -sCV -p8000 --open 127.0.0.1 -oN /dev/null | tail -3
+      - name: "D: -sV only"
+        run: time nmap -sV -p8000 127.0.0.1 -oN /dev/null | tail -3
+      - name: "E: -sC only"
+        run: time nmap -sC -p8000 127.0.0.1 -oN /dev/null | tail -3
+      - name: "F: per-script trace (-sC -d), seconds since start"
+        run: |
+          start=$(date +%s)
+          nmap -sC -p8000 -d 127.0.0.1 2>&1 | while IFS= read -r l; do
+            case "$l" in
+              *"NSE: Starting"*|*"NSE: Finished"*|*"NSE: Script scanning"*|*"NSE: Script Post"*|*"Completed NSE"*|*"Initiating NSE"*)
+                printf '%4ss %s\n' "$(( $(date +%s) - start ))" "$l" ;;
+            esac
+          done
+      - name: "G: per-probe trace of -sV (version-trace), seconds since start"
+        run: |
+          start=$(date +%s)
+          nmap -sV -p8000 --version-trace 127.0.0.1 2>&1 | while IFS= read -r l; do
+            case "$l" in
+              *"Service scan"*|*"probe"*|*"Probe"*|*"timed out"*|*"Completed Service"*)
+                printf '%4ss %s\n' "$(( $(date +%s) - start ))" "$l" ;;
+            esac
+          done | head -80
